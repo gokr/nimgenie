@@ -1,6 +1,19 @@
 # Nim binaries (without extensions)
 nimgenie
 
+# Generic pattern: Ignore files without extensions (likely executables)
+# But exclude important files that legitimately have no extension
+*
+!*/
+!*.*
+!Makefile
+!Dockerfile
+!LICENSE
+!README
+!CHANGELOG
+!CONTRIBUTORS
+!AUTHORS
+
 # Compiled Object files
 *.o
 *.obj
@@ -25,20 +38,8 @@ nimblecache/
 *.swo
 *~
 
-# OS generated files
-.DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
-Thumbs.db
-
 # Database files
 *.db
-*.sqlite
-*.sqlite3
-.nimgenie.db
 
 # Build directories
 build/
@@ -46,9 +47,3 @@ dist/
 
 # Documentation
 htmldocs/
-docs/
-
-# Test results and temporary files
-TEST_RESULTS.md
-THOUGHTS.md
-tests/
