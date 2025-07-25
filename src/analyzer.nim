@@ -1,4 +1,4 @@
-import std/[json, osproc, strutils, os, tables]
+import std/[json, osproc, strutils, os, strformat]
 
 type
   Analyzer* = object
@@ -17,10 +17,7 @@ proc execNimCommand*(analyzer: Analyzer, command: string, args: seq[string] = @[
     
     echo fmt"Executing: {fullCommand} in {dir}"
     
-    let process = startProcess("nim", dir, [command] & args, nil, {poUsePath, poStdErrToStdOut})
-    let output = process.outputStream.readAll()
-    let exitCode = process.waitForExit()
-    process.close()
+    let (output, exitCode) = execCmdEx("nim " & command & " " & args.join(" "), workingDir = dir)
     
     return (output: output, exitCode: exitCode)
   except OSError as e:
@@ -29,20 +26,20 @@ proc execNimCommand*(analyzer: Analyzer, command: string, args: seq[string] = @[
 proc checkSyntax*(analyzer: Analyzer, targetPath: string): JsonNode =
   ## Check syntax and semantics using nim check
   try:
-    let result = analyzer.execNimCommand("check", @["--hints:off", targetPath])
+    let cmdResult = analyzer.execNimCommand("check", @["--hints:off", targetPath])
     
-    if result.exitCode == 0:
+    if cmdResult.exitCode == 0:
       return %*{
         "status": "success",
         "message": "No syntax or semantic errors found",
-        "output": result.output
+        "output": cmdResult.output
       }
     else:
       return %*{
         "status": "error",
         "message": "Syntax or semantic errors found",
-        "output": result.output,
-        "exit_code": result.exitCode
+        "output": cmdResult.output,
+        "exit_code": cmdResult.exitCode
       }
       
   except Exception as e:
@@ -63,20 +60,20 @@ proc generateDocs*(analyzer: Analyzer, outputDir: string = "",
     
     args.add(analyzer.projectPath)
     
-    let result = analyzer.execNimCommand("doc", args)
+    let cmdResult = analyzer.execNimCommand("doc", args)
     
-    if result.exitCode == 0:
+    if cmdResult.exitCode == 0:
       return %*{
         "status": "success",
         "message": fmt"Documentation generated in {outDir}",
-        "output": result.output
+        "output": cmdResult.output
       }
     else:
       return %*{
         "status": "error",
         "message": "Failed to generate documentation",
-        "output": result.output,
-        "exit_code": result.exitCode
+        "output": cmdResult.output,
+        "exit_code": cmdResult.exitCode
       }
       
   except Exception as e:
@@ -90,11 +87,11 @@ proc findDefinition*(analyzer: Analyzer, filePath: string, line: int,
   ## Find definition of symbol at given position using --defusages
   try:
     let defUsagesArg = fmt"--defusages:{filePath},{line},{column}"
-    let result = analyzer.execNimCommand("check", @[defUsagesArg, filePath])
+    let cmdResult = analyzer.execNimCommand("check", @[defUsagesArg, filePath])
     
-    if result.exitCode == 0:
+    if cmdResult.exitCode == 0:
       # Parse the output to extract definition information
-      let lines = result.output.splitLines()
+      let lines = cmdResult.output.splitLines()
       var definitions = newJArray()
       
       for line in lines:
@@ -122,14 +119,14 @@ proc findDefinition*(analyzer: Analyzer, filePath: string, line: int,
       return %*{
         "status": "success",
         "definitions": definitions,
-        "raw_output": result.output
+        "raw_output": cmdResult.output
       }
     else:
       return %*{
         "status": "error",
         "message": "Failed to find definition",
-        "output": result.output,
-        "exit_code": result.exitCode
+        "output": cmdResult.output,
+        "exit_code": cmdResult.exitCode
       }
       
   except Exception as e:
@@ -142,13 +139,13 @@ proc expandMacro*(analyzer: Analyzer, macroName: string, filePath: string): Json
   ## Expand macro using --expandMacro
   try:
     let expandArg = fmt"--expandMacro:{macroName}"
-    let result = analyzer.execNimCommand("c", @[expandArg, "--verbosity:2", filePath])
+    let cmdResult = analyzer.execNimCommand("c", @[expandArg, "--verbosity:2", filePath])
     
     return %*{
-      "status": if result.exitCode == 0: "success" else: "error",
+      "status": if cmdResult.exitCode == 0: "success" else: "error",
       "macro_name": macroName,
-      "expanded_code": result.output,
-      "exit_code": result.exitCode
+      "expanded_code": cmdResult.output,
+      "exit_code": cmdResult.exitCode
     }
     
   except Exception as e:
@@ -160,20 +157,20 @@ proc expandMacro*(analyzer: Analyzer, macroName: string, filePath: string): Json
 proc getDependencies*(analyzer: Analyzer): JsonNode =
   ## Generate dependency information using genDepend
   try:
-    let result = analyzer.execNimCommand("genDepend", @[analyzer.projectPath])
+    let cmdResult = analyzer.execNimCommand("genDepend", @[analyzer.projectPath])
     
-    if result.exitCode == 0:
+    if cmdResult.exitCode == 0:
       return %*{
         "status": "success", 
-        "dependencies": result.output,
+        "dependencies": cmdResult.output,
         "message": "Dependencies generated successfully"
       }
     else:
       return %*{
         "status": "error",
         "message": "Failed to generate dependencies",
-        "output": result.output,
-        "exit_code": result.exitCode
+        "output": cmdResult.output,
+        "exit_code": cmdResult.exitCode
       }
       
   except Exception as e:
@@ -185,12 +182,12 @@ proc getDependencies*(analyzer: Analyzer): JsonNode =
 proc dumpConfig*(analyzer: Analyzer): JsonNode =
   ## Dump compiler configuration
   try:
-    let result = analyzer.execNimCommand("dump", @["--dump.format:json"])
+    let cmdResult = analyzer.execNimCommand("dump", @["--dump.format:json"])
     
-    if result.exitCode == 0:
+    if cmdResult.exitCode == 0:
       try:
         # Try to parse as JSON
-        let configJson = parseJson(result.output)
+        let configJson = parseJson(cmdResult.output)
         return %*{
           "status": "success",
           "config": configJson
@@ -199,14 +196,14 @@ proc dumpConfig*(analyzer: Analyzer): JsonNode =
         # If not valid JSON, return as text
         return %*{
           "status": "success", 
-          "config_text": result.output
+          "config_text": cmdResult.output
         }
     else:
       return %*{
         "status": "error",
         "message": "Failed to dump config",
-        "output": result.output,
-        "exit_code": result.exitCode
+        "output": cmdResult.output,
+        "exit_code": cmdResult.exitCode
       }
       
   except Exception as e:

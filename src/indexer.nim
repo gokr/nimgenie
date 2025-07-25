@@ -1,16 +1,16 @@
-import std/[json, os, strutils, sequtils, tables, times]
+import std/[json, os, strutils, strformat]
 import database
 import analyzer
 
 type
   Indexer* = object
-    db*: Database
+    database*: Database
     analyzer*: Analyzer
     projectPath*: string
 
-proc newIndexer*(db: Database, projectPath: string): Indexer =
+proc newIndexer*(database: Database, projectPath: string): Indexer =
   ## Create a new indexer for the given project
-  result.db = db
+  result.database = database
   result.projectPath = projectPath
   result.analyzer = newAnalyzer(projectPath)
 
@@ -72,7 +72,7 @@ proc parseNimDocJson*(indexer: Indexer, jsonOutput: string): int =
       if not isAbsolute(filePath):
         filePath = indexer.projectPath / filePath
       
-      let symbolId = indexer.db.insertSymbol(
+      let symbolId = indexer.database.insertSymbol(
         name = name,
         symbolType = symbolType,
         module = moduleName,
@@ -126,7 +126,7 @@ proc parseNimIdxFile*(indexer: Indexer, idxFilePath: string): int =
         let moduleName = extractFilename(filePath).replace(".nim", "")
         let fullPath = if isAbsolute(filePath): filePath else: indexer.projectPath / filePath
         
-        let symbolId = indexer.db.insertSymbol(
+        let symbolId = indexer.database.insertSymbol(
           name = name,
           symbolType = entryType,
           module = moduleName,
@@ -152,14 +152,14 @@ proc indexSingleFile*(indexer: Indexer, filePath: string): tuple[success: bool, 
     echo fmt"Indexing file: {filePath}"
     
     # Generate JSON documentation for the file
-    let result = indexer.analyzer.execNimCommand("jsondoc", @[filePath])
+    let cmdResult = indexer.analyzer.execNimCommand("jsondoc", @[filePath])
     
-    if result.exitCode != 0:
-      echo fmt"Failed to generate jsondoc for {filePath}: {result.output}"
+    if cmdResult.exitCode != 0:
+      echo fmt"Failed to generate jsondoc for {filePath}: {cmdResult.output}"
       return (success: false, symbolCount: 0)
     
     # Parse and store the symbols
-    let symbolCount = indexer.parseNimDocJson(result.output)
+    let symbolCount = indexer.parseNimDocJson(cmdResult.output)
     
     # Also try to find and parse corresponding .idx file if it exists
     let idxPath = filePath.replace(".nim", ".idx")
@@ -179,7 +179,7 @@ proc indexProject*(indexer: Indexer): string =
     echo fmt"Starting project indexing for: {indexer.projectPath}"
     
     # Clear existing symbols for this project
-    indexer.db.clearSymbols()
+    indexer.database.clearSymbols()
     
     # Find all Nim files
     let nimFiles = indexer.findNimFiles()
