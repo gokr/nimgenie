@@ -33,39 +33,61 @@ type
 
 ### Index Storage & Querying Strategy
 
-**Hybrid SQLite + In-Memory Cache Approach:**
+**Hybrid MySQL + Debby ORM + In-Memory Cache Approach:**
 
-#### SQLite Benefits:
+#### MySQL + Debby Benefits:
 - **Persistent storage** - index survives server restarts
-- **Complex queries** - JOIN operations across modules, filtering by type/visibility
-- **Proven scalability** - handles millions of symbols efficiently
+- **Complex queries** - JOIN operations across modules, filtering by type/visibility  
+- **Production scalability** - handles millions of symbols with InnoDB engine
 - **Built-in indexing** - B-tree indexes on symbol names, types, locations
 - **Transaction safety** - atomic updates when rebuilding indexes
+- **Connection pooling** - Thread-safe concurrent access via Debby pools
+- **Type safety** - Nim object models map directly to database tables
 
 #### In-Memory Cache Layer:
 - **Hot symbols cache** - frequently accessed definitions
 - **Active project symbols** - current working directory symbols
 - **Recent queries cache** - LRU cache of search results
 
-#### SQLite Schema:
+#### MySQL Schema (via Debby Models):
 ```sql
 CREATE TABLE symbols (
-  id INTEGER PRIMARY KEY,
-  name TEXT NOT NULL,
-  type TEXT NOT NULL,
-  module TEXT NOT NULL,  
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  name VARCHAR(255) NOT NULL,
+  symbol_type VARCHAR(100) NOT NULL,
+  module VARCHAR(255) NOT NULL,  
   file_path TEXT NOT NULL,
-  line INTEGER NOT NULL,
-  column INTEGER NOT NULL,
+  line INT NOT NULL,
+  column INT NOT NULL,
   signature TEXT,
   documentation TEXT,
-  visibility TEXT,
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
+  visibility VARCHAR(50),
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_symbols_name (name),
+  INDEX idx_symbols_module (module),
+  INDEX idx_symbols_type (symbol_type),
+  INDEX idx_symbols_file (file_path(255))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+```
 
-CREATE INDEX idx_symbols_name ON symbols(name);
-CREATE INDEX idx_symbols_module ON symbols(module);
-CREATE INDEX idx_symbols_type ON symbols(type);
+#### Debby Model Definitions:
+```nim
+type
+  Symbol* = ref object
+    id*: int
+    name*: string
+    symbolType*: string  # Maps to symbol_type via snake_case conversion
+    module*: string
+    filePath*: string    # Maps to file_path
+    line*: int
+    column*: int
+    signature*: Option[string]
+    documentation*: Option[string]
+    visibility*: Option[string]
+    createdAt*: string   # Maps to created_at
+  
+  Database* = object
+    pool*: Pool  # Thread-safe connection pool
 ```
 
 ### Nim Compiler Integration Approach
@@ -90,6 +112,72 @@ CREATE INDEX idx_symbols_type ON symbols(type);
 #### Integration Strategy:
 - **Exec `nim` commands**: Index building, documentation generation, project analysis
 - **nimsuggest process**: Real-time IDE features, completion, goto-definition
+
+### Database Layer: Working with Debby
+
+**Debby ORM Integration Patterns Following tankfeudserver:**
+
+#### Connection Pool Management:
+```nim
+proc newDatabase*(): Database =
+  ## Initialize database with connection pool
+  let host = getEnv("MYSQL_HOST", "localhost")
+  let port = parseInt(getEnv("MYSQL_PORT", "3306"))
+  let user = getEnv("MYSQL_USER", "root")
+  let password = getEnv("MYSQL_PASSWORD", "")
+  let database = getEnv("MYSQL_DATABASE", "nimgenie")
+  let poolSize = parseInt(getEnv("MYSQL_POOL_SIZE", "10"))
+  
+  result.pool = newPool()
+  for i in 0 ..< poolSize:
+    result.pool.add openDatabase(database, host, port, user, password)
+```
+
+#### Database Operations Patterns:
+```nim
+# Insert new records
+proc insertSymbol*(db: Database, ...): int =
+  let symbol = Symbol(name: name, symbolType: symbolType, ...)
+  db.pool.insert(symbol)
+  return symbol.id
+
+# Query with conditions  
+proc searchSymbols*(db: Database, query: string, ...): JsonNode =
+  let symbols = db.pool.query(Symbol, "SELECT * FROM symbols WHERE name LIKE ?", fmt"%{query}%")
+  
+# Filter with object conditions
+proc findModule*(db: Database, name: string): Option[Module] =
+  let modules = db.pool.filter(Module, it.name == name)
+  if modules.len > 0: some(modules[0]) else: none(Module)
+
+# Raw SQL operations
+proc clearSymbols*(db: Database, moduleName: string = "") =
+  db.pool.withDb:
+    if moduleName == "":
+      discard db.query("DELETE FROM symbols")
+    else:
+      discard db.query("DELETE FROM symbols WHERE module = ?", moduleName)
+```
+
+#### Field Mapping Conventions:
+- **Automatic snake_case**: Nim `symbolType` → MySQL `symbol_type`
+- **Explicit mapping**: Use descriptive Nim names, let Debby handle DB columns
+- **Optional fields**: Use `Option[T]` for nullable database columns
+- **Primary keys**: Always `id*: int` for auto-increment columns
+
+#### Configuration Environment Variables:
+- `MYSQL_HOST` - Database host (default: localhost)
+- `MYSQL_PORT` - Database port (default: 3306)  
+- `MYSQL_USER` - Database user (default: root)
+- `MYSQL_PASSWORD` - Database password (default: empty)
+- `MYSQL_DATABASE` - Database name (default: nimgenie)
+- `MYSQL_POOL_SIZE` - Connection pool size (default: 10)
+
+#### Thread Safety & Concurrency:
+- **Pool is thread-safe**: Can be safely accessed from multiple threads
+- **Lock-free operations**: Debby handles connection pooling internally
+- **withGenie template**: Ensures thread safety for shared state access
+- **No asyncdispatch**: All database operations are synchronous
 
 ## Core Features & MCP Tools
 
@@ -143,15 +231,15 @@ CREATE INDEX idx_symbols_type ON symbols(type);
 
 ## Implementation Phases
 
-### Phase 1: Project Setup & Basic Infrastructure
+### Phase 1: Project Setup & Basic Infrastructure ✅
 1. Create project structure (nimgenie.nimble, src/ directory)
 2. Add nimcp dependency and basic MCP server skeleton
-3. Set up SQLite database schema for symbol indexing
+3. Set up MySQL database schema with Debby ORM for symbol indexing
 4. Implement basic exec wrapper for nim compiler commands
 5. Create initial project indexing functionality using `nim doc --index`
 
-### Phase 2: Core Indexing System
-6. Implement SQLite storage for parsed symbol data
+### Phase 2: Core Indexing System ✅
+6. Implement MySQL + Debby ORM storage for parsed symbol data
 7. Add in-memory caching layer for frequently accessed symbols
 8. Create batch processing for multiple files
 9. Add incremental index updates (only changed files)
@@ -192,6 +280,17 @@ nimgenie/
 - **strutils, sequtils**: String and sequence utilities
 
 ## Development Commands
+
+### MySQL Configuration
+Set up your MySQL database connection via environment variables:
+```bash
+export MYSQL_HOST=localhost
+export MYSQL_PORT=3306
+export MYSQL_USER=nimgenie_user
+export MYSQL_PASSWORD=your_password
+export MYSQL_DATABASE=nimgenie
+export MYSQL_POOL_SIZE=10
+```
 
 ### Build
 ```bash

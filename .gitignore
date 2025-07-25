@@ -1,0 +1,54 @@
+# Nim binaries (without extensions)
+nimgenie
+
+# Compiled Object files
+*.o
+*.obj
+
+# Dynamic libraries
+*.so
+*.dylib
+*.dll
+
+# Static libraries
+*.a
+*.lib
+
+# Nimble cache
+nimcache/
+nimblecache/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+.nimgenie.db
+
+# Build directories
+build/
+dist/
+
+# Documentation
+htmldocs/
+docs/
+
+# Test results and temporary files
+TEST_RESULTS.md
+THOUGHTS.md
+tests/
