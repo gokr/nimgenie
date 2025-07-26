@@ -35,62 +35,34 @@ type
 
 proc newDatabase*(): Database =
   ## Create a new database instance with connection pool
-  let host = getEnv("MYSQL_HOST", "localhost")
-  let port = parseInt(getEnv("MYSQL_PORT", "3306"))
-  let user = getEnv("MYSQL_USER", "root")
-  let password = getEnv("MYSQL_PASSWORD", "")
-  let database = getEnv("MYSQL_DATABASE", "nimgenie")
-  let poolSize = parseInt(getEnv("MYSQL_POOL_SIZE", "10"))
+  let host = getEnv("TIDB_HOST", "localhost")
+  let port = parseInt(getEnv("TIDB_PORT", "4000"))
+  let user = getEnv("TIDB_USER", "root")
+  let password = getEnv("TIDB_PASSWORD", "")
+  let database = getEnv("TIDB_DATABASE", "nimgenie")
+  let poolSize = parseInt(getEnv("TIDB_POOL_SIZE", "10"))
   
   result.pool = newPool()
   for i in 0 ..< poolSize:
     result.pool.add openDatabase(database, host, port, user, password)
   
-  # Create tables if they don't exist
+  # Create tables using Debby model definitions
   result.pool.withDb:
-    discard db.query("""
-      CREATE TABLE IF NOT EXISTS symbols (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        name VARCHAR(255) NOT NULL,
-        symbol_type VARCHAR(100) NOT NULL,
-        module VARCHAR(255) NOT NULL,
-        file_path TEXT NOT NULL,
-        line INT NOT NULL,
-        column INT NOT NULL,
-        signature TEXT,
-        documentation TEXT,
-        visibility VARCHAR(50),
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        INDEX idx_symbols_name (name),
-        INDEX idx_symbols_module (module),
-        INDEX idx_symbols_type (symbol_type),
-        INDEX idx_symbols_file (file_path(255))
-      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-    """)
+    if not db.tableExists(Symbol):
+      db.createTable(Symbol)
+      # Create indexes for performance
+      db.createIndex(Symbol, "name")
+      db.createIndex(Symbol, "module")
+      db.createIndex(Symbol, "symbolType")
     
-    discard db.query("""
-      CREATE TABLE IF NOT EXISTS modules (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        name VARCHAR(255) UNIQUE NOT NULL,
-        file_path TEXT NOT NULL,
-        last_modified TIMESTAMP NULL,
-        documentation TEXT,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        INDEX idx_modules_name (name),
-        INDEX idx_modules_path (file_path(255))
-      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-    """)
+    if not db.tableExists(Module):
+      db.createTable(Module)
+      db.createIndex(Module, "name")
     
-    discard db.query("""
-      CREATE TABLE IF NOT EXISTS registered_directories (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        path TEXT UNIQUE NOT NULL,
-        name VARCHAR(255),
-        description TEXT,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        INDEX idx_registered_dirs_path (path(255))
-      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-    """)
+    if not db.tableExists(RegisteredDirectory):
+      db.createTable(RegisteredDirectory)
+      # Create index on path (limited length for TEXT columns)
+      db.query("CREATE INDEX IF NOT EXISTS idx_registered_dirs_path ON registered_directories (path(255))")
 
 proc closeDatabase*(db: Database) =
   ## Close the database connection pool

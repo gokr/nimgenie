@@ -8,7 +8,7 @@ NimGenie is a comprehensive MCP (Model Context Protocol) server for Nim programm
 ### Core Architecture Design
 
 **NimGenie as Central Coordinator:**
-- **Database Ownership**: NimGenie owns and manages the MySQL database with connection pooling
+- **Database Ownership**: NimGenie owns and manages the Tidb database with connection pooling
 - **Multi-Project Support**: Can simultaneously work with multiple Nim projects
 - **Nimble Package Discovery**: Automatically discovers and can index locally installed Nimble packages
 - **Intelligent Caching**: In-memory symbol cache for frequently accessed definitions
@@ -22,7 +22,7 @@ type
     lastIndexed*: DateTime  # Timestamp of last indexing
     
   NimGenie* = object
-    database*: Database                    # Owns MySQL database with connection pooling
+    database*: Database                    # Owns Tidb database with connection pooling
     projects*: Table[string, NimProject]   # Multiple projects indexed by path
     nimblePackages*: Table[string, string] # Discovered packages (name -> path)
     symbolCache*: Table[string, JsonNode]  # In-memory cache for frequent lookups
@@ -33,9 +33,9 @@ type
 
 ### Index Storage & Querying Strategy
 
-**Hybrid MySQL + Debby ORM + In-Memory Cache Approach:**
+**Hybrid Tidb + Debby ORM + In-Memory Cache Approach:**
 
-#### MySQL + Debby Benefits:
+#### Tidb + Debby Benefits:
 - **Persistent storage** - index survives server restarts
 - **Complex queries** - JOIN operations across modules, filtering by type/visibility  
 - **Production scalability** - handles millions of symbols with InnoDB engine
@@ -49,7 +49,8 @@ type
 - **Active project symbols** - current working directory symbols
 - **Recent queries cache** - LRU cache of search results
 
-#### MySQL Schema (via Debby Models):
+#### TiDB Schema (automatically generated from Debby Models):
+Tables are created automatically using `db.createTable(ModelType)`. The resulting schema:
 ```sql
 CREATE TABLE symbols (
   id INT AUTO_INCREMENT PRIMARY KEY,
@@ -67,7 +68,27 @@ CREATE TABLE symbols (
   INDEX idx_symbols_module (module),
   INDEX idx_symbols_type (symbol_type),
   INDEX idx_symbols_file (file_path(255))
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+);
+
+CREATE TABLE modules (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  name VARCHAR(255) UNIQUE NOT NULL,
+  file_path TEXT NOT NULL,
+  last_modified TIMESTAMP NULL,
+  documentation TEXT,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_modules_name (name),
+  INDEX idx_modules_path (file_path(255))
+);
+
+CREATE TABLE registered_directories (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  path TEXT UNIQUE NOT NULL,
+  name VARCHAR(255),
+  description TEXT,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_registered_dirs_path (path(255))
+);
 ```
 
 #### Debby Model Definitions:
@@ -121,12 +142,12 @@ type
 ```nim
 proc newDatabase*(): Database =
   ## Initialize database with connection pool
-  let host = getEnv("MYSQL_HOST", "localhost")
-  let port = parseInt(getEnv("MYSQL_PORT", "3306"))
-  let user = getEnv("MYSQL_USER", "root")
-  let password = getEnv("MYSQL_PASSWORD", "")
-  let database = getEnv("MYSQL_DATABASE", "nimgenie")
-  let poolSize = parseInt(getEnv("MYSQL_POOL_SIZE", "10"))
+  let host = getEnv("TIDB_HOST", "localhost")
+  let port = parseInt(getEnv("TIDB_PORT", "3306"))
+  let user = getEnv("TIDB_USER", "root")
+  let password = getEnv("TIDB_PASSWORD", "")
+  let database = getEnv("TIDB_DATABASE", "nimgenie")
+  let poolSize = parseInt(getEnv("TIDB_POOL_SIZE", "10"))
   
   result.pool = newPool()
   for i in 0 ..< poolSize:
@@ -135,22 +156,51 @@ proc newDatabase*(): Database =
 
 #### Database Operations Patterns:
 ```nim
-# Insert new records
+# Table creation (following tankfeudserver patterns)
+proc newDatabase*(): Database =
+  # ... connection setup ...
+  result.pool.withDb:
+    if not db.tableExists(Symbol):
+      db.createTable(Symbol)
+      db.createIndex(Symbol, "name")
+      db.createIndex(Symbol, "module")
+      db.createIndex(Symbol, "symbolType")
+    
+    if not db.tableExists(Module):
+      db.createTable(Module)
+      db.createIndex(Module, "name")
+    
+    if not db.tableExists(RegisteredDirectory):
+      db.createTable(RegisteredDirectory)
+
+# Insert new records using Debby ORM
 proc insertSymbol*(db: Database, ...): int =
   let symbol = Symbol(name: name, symbolType: symbolType, ...)
   db.pool.insert(symbol)
   return symbol.id
 
-# Query with conditions  
+# Type-safe queries with Debby
 proc searchSymbols*(db: Database, query: string, ...): JsonNode =
   let symbols = db.pool.query(Symbol, "SELECT * FROM symbols WHERE name LIKE ?", fmt"%{query}%")
   
-# Filter with object conditions
+# Object-based filtering
 proc findModule*(db: Database, name: string): Option[Module] =
   let modules = db.pool.filter(Module, it.name == name)
   if modules.len > 0: some(modules[0]) else: none(Module)
 
-# Raw SQL operations
+# Update operations
+proc updateModule*(db: Database, module: Module) =
+  db.pool.update(module)
+
+# Direct access operations  
+proc getSymbolById*(db: Database, id: int): Option[Symbol] =
+  try:
+    let symbol = db.pool.get(Symbol, id)
+    some(symbol)
+  except:
+    none(Symbol)
+
+# Raw SQL operations (when complex queries needed)
 proc clearSymbols*(db: Database, moduleName: string = "") =
   db.pool.withDb:
     if moduleName == "":
@@ -160,18 +210,18 @@ proc clearSymbols*(db: Database, moduleName: string = "") =
 ```
 
 #### Field Mapping Conventions:
-- **Automatic snake_case**: Nim `symbolType` → MySQL `symbol_type`
+- **Automatic snake_case**: Nim `symbolType` → Tidb `symbol_type`
 - **Explicit mapping**: Use descriptive Nim names, let Debby handle DB columns
 - **Optional fields**: Use `Option[T]` for nullable database columns
 - **Primary keys**: Always `id*: int` for auto-increment columns
 
 #### Configuration Environment Variables:
-- `MYSQL_HOST` - Database host (default: localhost)
-- `MYSQL_PORT` - Database port (default: 3306)  
-- `MYSQL_USER` - Database user (default: root)
-- `MYSQL_PASSWORD` - Database password (default: empty)
-- `MYSQL_DATABASE` - Database name (default: nimgenie)
-- `MYSQL_POOL_SIZE` - Connection pool size (default: 10)
+- `TIDB_HOST` - Database host (default: localhost)
+- `TIDB_PORT` - Database port (default: 3306)  
+- `TIDB_USER` - Database user (default: root)
+- `TIDB_PASSWORD` - Database password (default: empty)
+- `TIDB_DATABASE` - Database name (default: nimgenie)
+- `TIDB_POOL_SIZE` - Connection pool size (default: 10)
 
 #### Thread Safety & Concurrency:
 - **Pool is thread-safe**: Can be safely accessed from multiple threads
@@ -203,7 +253,7 @@ proc clearSymbols*(db: Database, moduleName: string = "") =
 ### 4. Multi-Project Architecture Benefits
 - **Automatic project detection**: Creates NimProject instances on-demand
 - **Per-project analyzers**: Each project maintains its own Nim compiler interface
-- **Shared symbol database**: All projects share the same MySQL database for unified search
+- **Shared symbol database**: All projects share the same Tidb database for unified search
 - **Intelligent caching**: Symbol cache shared across all projects for performance
 
 ## Key Architectural Improvements
@@ -234,12 +284,12 @@ proc clearSymbols*(db: Database, moduleName: string = "") =
 ### Phase 1: Project Setup & Basic Infrastructure ✅
 1. Create project structure (nimgenie.nimble, src/ directory)
 2. Add nimcp dependency and basic MCP server skeleton
-3. Set up MySQL database schema with Debby ORM for symbol indexing
+3. Set up Tidb database schema with Debby ORM for symbol indexing
 4. Implement basic exec wrapper for nim compiler commands
 5. Create initial project indexing functionality using `nim doc --index`
 
 ### Phase 2: Core Indexing System ✅
-6. Implement MySQL + Debby ORM storage for parsed symbol data
+6. Implement Tidb + Debby ORM storage for parsed symbol data
 7. Add in-memory caching layer for frequently accessed symbols
 8. Create batch processing for multiple files
 9. Add incremental index updates (only changed files)
@@ -274,7 +324,7 @@ nimgenie/
 
 ### Core Dependencies
 - **nimcp**: MCP server framework (https://github.com/gokr/nimcp)
-- **debby/mysql**: MySQL database with connection pooling for persistent symbol storage
+- **debby/mysql**: Tidb database with connection pooling for persistent symbol storage
 - **json**: JSON parsing for nim compiler output
 - **os, osproc**: System operations and process execution
 - **tables**: Hash tables for multi-project management and caching
@@ -282,37 +332,37 @@ nimgenie/
 - **strutils, sequtils**: String and sequence utilities
 
 ### Database Requirements
-- **Production**: MySQL 5.7+ or MariaDB 10.3+ with InnoDB engine
-- **Development/Testing**: TiDB 6.0+ (MySQL-compatible distributed database)
+- **Primary Database**: TiDB (MySQL-compatible distributed database)
   - Easy setup via TiUP: `tiup playground`
   - No complex installation or configuration required
-  - Automatic schema creation and migration support
-  - Compatible with all MySQL features used by NimGenie
+  - Automatic schema creation via Debby ORM models
+  - Handles table creation, indexing, and migrations automatically
 
-### Why TiDB for Development?
+### Why TiDB?
 - **Zero Configuration**: Single command startup with `tiup playground`
-- **MySQL Compatibility**: 100% compatible with our Debby/MySQL code
+- **MySQL Compatible**: Works with existing MySQL ecosystem and tools
 - **Development Speed**: No need to install and configure MySQL locally
 - **Testing Isolation**: Easy to create/destroy test databases
-- **Production Ready**: Can scale to production if needed
+- **Production Scalable**: Distributed architecture scales horizontally
+- **Modern Architecture**: Cloud-native, ACID compliant, supports both OLTP and OLAP
 
 ## Development Commands
 
 ### Database Configuration
 
-#### Production MySQL Setup
-Set up your MySQL database connection via environment variables:
+#### Production Tidb Setup
+Set up your Tidb database connection via environment variables:
 ```bash
-export MYSQL_HOST=localhost
-export MYSQL_PORT=3306
-export MYSQL_USER=nimgenie_user
-export MYSQL_PASSWORD=your_password
-export MYSQL_DATABASE=nimgenie
-export MYSQL_POOL_SIZE=10
+export TIDB_HOST=localhost
+export TIDB_PORT=4000
+export TIDB_USER=nimgenie_user
+export TIDB_PASSWORD=your_password
+export TIDB_DATABASE=nimgenie
+export TIDB_POOL_SIZE=10
 ```
 
 #### Development with TiDB
-For development and testing, we use TiDB which provides MySQL compatibility with easier setup:
+For development and testing, we use TiDB which provides Tidb compatibility with easier setup:
 
 ```bash
 # Install TiUP (TiDB cluster management tool)
@@ -360,7 +410,7 @@ nimble test        # All tests including database tests will run
 #### Test Architecture
 The test suite is designed to work with both local development and CI environments:
 
-- **Database Tests**: Use TiDB for MySQL compatibility testing
+- **Database Tests**: Use TiDB for Tidb compatibility testing
 - **Conditional Execution**: Database tests are automatically skipped if TiDB is not available
 - **Test Isolation**: Each test creates a unique database to avoid conflicts
 - **Cleanup**: Automatic cleanup of test databases after each test suite
@@ -369,12 +419,12 @@ The test suite is designed to work with both local development and CI environmen
 Tests use these TiDB default settings:
 ```nim
 # Automatically configured for tests
-MYSQL_HOST=127.0.0.1
-MYSQL_PORT=4000
-MYSQL_USER=root
-MYSQL_PASSWORD=
-MYSQL_DATABASE=nimgenie_test_{timestamp}  # Unique per test run
-MYSQL_POOL_SIZE=5  # Smaller pool for tests
+TIDB_HOST=127.0.0.1
+TIDB_PORT=4000
+TIDB_USER=root
+TIDB_PASSWORD=
+TIDB_DATABASE=nimgenie_test_{timestamp}  # Unique per test run
+TIDB_POOL_SIZE=5  # Smaller pool for tests
 ```
 
 #### Test File Structure
