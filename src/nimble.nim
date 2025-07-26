@@ -1,4 +1,4 @@
-import std/[json, strutils, strformat, osproc, os, options, tables, times]
+import std/[json, strutils, strformat, osproc, os, options]
 
 type
   NimbleResult* = object
@@ -21,22 +21,18 @@ proc executeNimble*(cmd: NimbleCommand, args: varargs[string]): NimbleResult =
   result.data = newJNull()
   
   try:
-    let fullArgs = @[cmd.executable] & @args
-    let process = startProcess(
-      command = cmd.executable,
-      args = @args,
+    let (output, exitCode) = execCmdEx(
+      command = cmd.executable & " " & args.join(" "),
       workingDir = cmd.workingDir,
-      options = {poUsePath, poStdErrToStdOut}
+      options = {poUsePath}
     )
     
-    let (output, exitCode) = process.waitForExit()
-    process.close()
-    
     result.output = output
+    
     result.success = exitCode == 0
     
     if not result.success:
-      result.errorMsg = fmt"Nimble command failed with exit code {exitCode}: {output}"
+      result.errorMsg = fmt"Nimble command failed with exit code {exitCode}: {result.output}"
     
     # Try to parse JSON output if available
     if result.success and result.output.len > 0:
@@ -53,15 +49,15 @@ proc executeNimble*(cmd: NimbleCommand, args: varargs[string]): NimbleResult =
     result.errorMsg = fmt"Failed to execute nimble command: {e.msg}"
     result.output = ""
 
-proc formatNimbleOutput*(result: NimbleResult): string =
+proc formatNimbleOutput*(nimbleResult: NimbleResult): string =
   ## Format nimble result for LLM consumption
-  if not result.success:
-    return fmt"Error: {result.errorMsg}"
+  if not nimbleResult.success:
+    return fmt"Error: {nimbleResult.errorMsg}"
   
-  if result.data.kind != JNull:
-    return $result.data
+  if nimbleResult.data.kind != JNull:
+    return $nimbleResult.data
   else:
-    return result.output
+    return nimbleResult.output
 
 # Package Management Operations
 

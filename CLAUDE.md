@@ -441,166 +441,38 @@ tests/
 This architecture provides the foundation for a powerful, scalable MCP tool that makes Nim development more accessible to AI assistants while leveraging the full power of the Nim toolchain.
 
 
-## Coding Guidelines
-
-### Variable Naming
-- Do not introduce a local variable called "result" since Nim has such a variable already defined that represents the return value
-- Always use doc comment with double "##" right below the signature for Nim procs, not above
-
-### Result Variable and Return Statement Style
-Follow these patterns for idiomatic Nim code:
-
-**Single-line functions**: Use direct expression without `result =` assignment
-```nim
-proc getTimeout*(server: McpServer): int =
-  server.requestTimeout
-
-proc `%`*(id: JsonRpcId): JsonNode =
-  case id.kind
-  of jridString: %id.str
-  of jridNumber: %id.num
-```
-
-**Multi-line functions with return at end**: Use `return expression` for clarity
-```nim
-proc handleInitialize(server: McpServer, params: JsonNode): JsonNode =
-  server.initialized = true
-  return createInitializeResponseJson(server.serverInfo, server.capabilities)
-```
-
-**Early exits**: Use `return value` instead of `result = value; return`
-```nim
-proc validateInput(value: string): bool =
-  if value.len == 0:
-    return false
-  # ... more validation
-  true
-```
-
-**Exception handlers**: Use `return expression` for error cases
-```nim
-proc processRequest(): McpToolResult =
-  try:
-    # ... processing
-    McpToolResult(content: @[result])
-  except ValueError:
-    return McpToolResult(content: @[createTextContent("Error: Invalid input")])
-```
-
-**Avoid**: The verbose pattern of `result = value; return` for early exits
-
-### Field Access Guidelines
-
-**Direct Field Access**: Prefer direct field access over trivial getter/setter procedures
-```nim
-# Preferred: Direct field access for simple get/set operations
-server.requestTimeout = 5000        # Direct assignment
-let timeout = server.requestTimeout # Direct access
-composed.mainServer                 # Direct access to public fields
-mountPoint.server                   # Direct access to public fields
-
-# Avoid: Trivial getter/setter procedures
-proc getRequestTimeout*(server: McpServer): int = server.requestTimeout
-proc setRequestTimeout*(server: McpServer, timeout: int) = server.requestTimeout = timeout
-```
-
-**When to Use Procedures**: Reserve procedures for complex operations with logic
-```nim
-# Appropriate: Complex logic, validation, or side effects
-proc setLogLevel*(server: McpServer, level: LogLevel) =
-  server.logger.setMinLevel(level)  # Calls method on nested object
-
-proc getServerStats*(server: McpServer): Table[string, JsonNode] =
-  # Complex computation combining multiple fields
-  result = initTable[string, JsonNode]()
-  result["serverName"] = %server.serverInfo.name
-  result["toolCount"] = %server.getRegisteredToolNames().len
-```
-
-**Public Field Declaration**: Use `*` to export fields that should be directly accessible
-```nim
-type
-  McpServer* = ref object
-    serverInfo*: McpServerInfo      # Public - direct access allowed
-    requestTimeout*: int            # Public - direct access allowed
-    initialized*: bool              # Public - direct access allowed
-    internalState: SomePrivateType  # Private - no direct access
-```
-
-### JSON Handling Style Guidelines
-
-**JSON Object Construction**: Prefer the `%*{}` syntax for clean, readable JSON creation
-```nim
-# Preferred: Clean and readable
-let response = %*{
-  "content": contentsToJsonArray(contents),
-  "isError": false
-}
-
-# Avoid: Manual construction when %*{} is sufficient
-let response = newJObject()
-response["content"] = contentsToJsonArray(contents)
-response["isError"] = %false
-```
-
-**Field Access**: Use consolidated utility functions for consistent error handling
-```nim
-# Preferred: Type-safe field access with clear error messages
-let toolName = requireStringField(params, "name")
-let optionalArg = getStringField(params, "argument", "default")
-
-# Avoid: Direct access without proper error handling
-let toolName = params["name"].getStr()  # Can throw exceptions
-```
-
-**Content Serialization**: Use centralized utilities for consistent formatting
-```nim
-# Preferred: Consolidated utilities
-let jsonContent = contentToJsonNode(content)
-let jsonArray = contentsToJsonArray(contents)
-
-# Avoid: Manual serialization patterns
-let jsonContent = %*{
-  "type": content.`type`,
-  "text": content.text  # Missing proper variant handling
-}
-```
-
-**Error Response Creation**: Use standardized error utilities across all transport layers
-```nim
-# Preferred: Consistent error responses
-let errorResponse = createParseError(details = e.msg)
-let invalidResponse = createInvalidRequest(id, "Missing required field")
-
-# Avoid: Manual error construction
-let errorResponse = JsonRpcResponse(
-  jsonrpc: "2.0",
-  id: id,
-  error: some(JsonRpcError(code: -32700, message: "Parse error"))
-)
-```
-
-**Field Validation**: Combine validation with field access for cleaner code
-```nim
-# Preferred: Validation integrated with access
-proc handleToolCall(params: JsonNode): JsonNode =
-  let toolName = requireStringField(params, "name")  # Validates and extracts
-  let arguments = params.getOrDefault("arguments", newJObject())
-
-# Avoid: Separate validation and access steps
-proc handleToolCall(params: JsonNode): JsonNode =
-  if not params.hasKey("name"):
-    raise newException(ValueError, "Missing name field")
-  let toolName = params["name"].getStr()
-```
+## Nim coding Guidelines
+- We do not use "_" in naming (snake case), we prefer instead camel case
+- Do not shadow the local `result` variable (Nim built-in)
+- Doc comments: `##` below proc signature
+- Prefer generics or object variants over methods and type inheritance
+- Use `return expression` for early exits
+- Prefer direct field access over getters/setters
+- **NO `asyncdispatch`** - we use threads for concurrency
+- Remove old code during refactoring
+- Import full modules, not selected symbols
+- Use `*` to export fields that should be publicly accessible
+- If something is not exported, export it instead of doing workarounds
+- Do not be afraid to break backwards compatibility
+- Do not add comments talking about how good something is, it is just noise. Be brief.
+- Do not add comments that reflect what has changed, we use git for change tracking, only describe current code
+- Do not add unnecessary commentary or explain code that is self-explanatory
+- **DO NOT USE `asyncdispatch`** - This project explicitly avoids asyncdispatch for concurrency
+- Generally try to avoid Option[T] if possible, it is not a style I like that much
+- **Single-line functions**: Use direct expression without `result =` assignment or `return` statement
+- **Multi-line functions**: Use `result =` assignment and `return` statement for clarity
+- **Early exits**: Use `return value` instead of `result = value; return`
+- **JSON Object Construction**: Prefer the `%*{}` syntax for clean, readable JSON creation
+- **Content Serialization**: Use dedicated procs or templates for consistent formatting
 
 ## Development Best Practices
 - Always end todolists by running all the tests at the end to verify everything compiles and works
 
-### Async and Concurrency Guidelines
-- **DO NOT USE `asyncdispatch`** - This project explicitly avoids asyncdispatch for concurrency
-- Use **`taskpools`** for concurrent processing and background tasks
-- Use **synchronous I/O** with taskpools rather than async/await patterns
-- For HTTP/WebSocket transports, use Mummy's built-in async capabilities but avoid introducing asyncdispatch dependencies
-- All concurrent operations should be implemented using taskpools and synchronous patterns for stdio transport
-- Real-time capabilities are provided via WebSocket transport using Mummy's built-in WebSocket support
+### Refactoring and Code Cleanup
+- **Remove old unused code during refactoring** - We prioritize clean, maintainable code over backwards compatibility
+- When implementing new architecture patterns, completely remove the old implementation patterns
+- Delete deprecated methods, unused types, and obsolete code paths immediately
+- Keep the codebase lean and focused on the current architectural approach
+
+## Development Best Practices
+- Always end todolists by running all the tests at the end to verify everything compiles and works

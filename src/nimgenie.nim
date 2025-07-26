@@ -1,5 +1,5 @@
 import nimcp
-import std/[json, tables, strutils, os, strformat, algorithm, mimetypes, base64, options, locks, times]
+import std/[json, tables, strutils, os, strformat, mimetypes, base64, options, locks, times]
 import database
 import indexer
 import analyzer
@@ -323,6 +323,236 @@ let server = mcpServer("nimgenie", "0.1.0"):
           return fmt"Successfully indexed Nimble package '{packageName}': {indexResult}"
       except Exception as e:
         return fmt"Failed to index Nimble package '{packageName}': {e.msg}"
+
+  # Package Management Tools
+  mcpTool:
+    proc nimbleInstallPackage(packageName: string, version: string = ""): string {.gcsafe.} =
+      ## Install a Nimble package with optional version constraint
+      try:
+        withGenie:
+          let currentPath = getCurrentDir()
+          let nimbleResult = nimbleInstall(currentPath, packageName, version)
+          return formatNimbleOutput(nimbleResult)
+      except Exception as e:
+        return fmt"Failed to install package: {e.msg}"
+
+  mcpTool:
+    proc nimbleUninstallPackage(packageName: string): string {.gcsafe.} =
+      ## Uninstall a Nimble package
+      try:
+        withGenie:
+          let currentPath = getCurrentDir()
+          let nimbleResult = nimbleUninstall(currentPath, packageName)
+          return formatNimbleOutput(nimbleResult)
+      except Exception as e:
+        return fmt"Failed to uninstall package: {e.msg}"
+
+  mcpTool:
+    proc nimbleSearchPackages(query: string): string {.gcsafe.} =
+      ## Search for packages in the Nimble registry
+      try:
+        withGenie:
+          let currentPath = getCurrentDir()
+          let nimbleResult = nimbleSearch(currentPath, query)
+          return formatNimbleOutput(nimbleResult)
+      except Exception as e:
+        return fmt"Failed to search packages: {e.msg}"
+
+  mcpTool:
+    proc nimbleListPackages(installed: bool = false): string {.gcsafe.} =
+      ## List Nimble packages (installed vs available)
+      try:
+        withGenie:
+          let currentPath = getCurrentDir()
+          let nimbleResult = nimbleList(currentPath, installed)
+          return formatNimbleOutput(nimbleResult)
+      except Exception as e:
+        return fmt"Failed to list packages: {e.msg}"
+
+  mcpTool:
+    proc nimbleRefreshPackages(): string {.gcsafe.} =
+      ## Refresh package list from registry
+      try:
+        withGenie:
+          let currentPath = getCurrentDir()
+          let nimbleResult = nimbleRefresh(currentPath)
+          return formatNimbleOutput(nimbleResult)
+      except Exception as e:
+        return fmt"Failed to refresh packages: {e.msg}"
+
+  # Project Development Tools
+  mcpTool:
+    proc nimbleInitProject(projectName: string, packageType: string = "lib"): string {.gcsafe.} =
+      ## Initialize a new Nimble project
+      try:
+        withGenie:
+          let currentPath = getCurrentDir()
+          let nimbleResult = nimbleInit(currentPath, projectName, packageType)
+          
+          # After successful project initialization, automatically index it
+          if nimbleResult.success:
+            let indexer = newIndexer(genie.database, currentPath)
+            let indexResult = indexer.indexProject()
+            genie.symbolCache.clear()
+            return fmt"{formatNimbleOutput(nimbleResult)}\n\nProject indexed: {indexResult}"
+          else:
+            return formatNimbleOutput(nimbleResult)
+      except Exception as e:
+        return fmt"Failed to initialize project: {e.msg}"
+
+  mcpTool:
+    proc nimbleBuildProject(target: string = "", mode: string = ""): string {.gcsafe.} =
+      ## Build the current Nimble project
+      try:
+        withGenie:
+          let currentPath = getCurrentDir()
+          let nimbleResult = nimbleBuild(currentPath, target, mode)
+          return formatNimbleOutput(nimbleResult)
+      except Exception as e:
+        return fmt"Failed to build project: {e.msg}"
+
+  mcpTool:
+    proc nimbleTestProject(testFilter: string = ""): string {.gcsafe.} =
+      ## Run tests for the current Nimble project
+      try:
+        withGenie:
+          let currentPath = getCurrentDir()
+          let nimbleResult = nimbleTest(currentPath, testFilter)
+          return formatNimbleOutput(nimbleResult)
+      except Exception as e:
+        return fmt"Failed to run tests: {e.msg}"
+
+  mcpTool:
+    proc nimbleRunProject(target: string, args: string = ""): string {.gcsafe.} =
+      ## Execute a Nimble project binary
+      try:
+        withGenie:
+          let currentPath = getCurrentDir()
+          let argsList = if args.len > 0: args.split(" ") else: @[]
+          let nimbleResult = nimbleRun(currentPath, target, argsList)
+          return formatNimbleOutput(nimbleResult)
+      except Exception as e:
+        return fmt"Failed to run project: {e.msg}"
+
+  mcpTool:
+    proc nimbleCheckProject(file: string = ""): string {.gcsafe.} =
+      ## Validate Nimble project configuration
+      try:
+        withGenie:
+          let currentPath = getCurrentDir()
+          let nimbleResult = nimbleCheck(currentPath, file)
+          return formatNimbleOutput(nimbleResult)
+      except Exception as e:
+        return fmt"Failed to check project: {e.msg}"
+
+  # Dependency Management Tools
+  mcpTool:
+    proc nimbleDevelopPackage(action: string, path: string = ""): string {.gcsafe.} =
+      ## Manage development dependencies (add/remove/list)
+      try:
+        withGenie:
+          let currentPath = getCurrentDir()
+          let nimbleResult = nimbleDevelop(currentPath, action, path)
+          return formatNimbleOutput(nimbleResult)
+      except Exception as e:
+        return fmt"Failed to manage develop package: {e.msg}"
+
+  mcpTool:
+    proc nimbleUpgradePackages(packageName: string = ""): string {.gcsafe.} =
+      ## Upgrade packages to latest versions
+      try:
+        withGenie:
+          let currentPath = getCurrentDir()
+          let nimbleResult = nimbleUpgrade(currentPath, packageName)
+          return formatNimbleOutput(nimbleResult)
+      except Exception as e:
+        return fmt"Failed to upgrade packages: {e.msg}"
+
+  mcpTool:
+    proc nimbleDumpDependencies(): string {.gcsafe.} =
+      ## Export current project dependency information
+      try:
+        withGenie:
+          let currentPath = getCurrentDir()
+          let nimbleResult = nimbleDump(currentPath)
+          return formatNimbleOutput(nimbleResult)
+      except Exception as e:
+        return fmt"Failed to dump dependencies: {e.msg}"
+
+  # Project Information Tools
+  mcpTool:
+    proc nimblePackageInfo(packageName: string): string {.gcsafe.} =
+      ## Get detailed information about a package
+      try:
+        withGenie:
+          let currentPath = getCurrentDir()
+          let nimbleResult = nimbleInfo(currentPath, packageName)
+          return formatNimbleOutput(nimbleResult)
+      except Exception as e:
+        return fmt"Failed to get package info: {e.msg}"
+
+  mcpTool:
+    proc nimbleShowDependencies(showTree: bool = false): string {.gcsafe.} =
+      ## Display project dependency information
+      try:
+        withGenie:
+          let currentPath = getCurrentDir()
+          let nimbleResult = nimbleDeps(currentPath, showTree)
+          return formatNimbleOutput(nimbleResult)
+      except Exception as e:
+        return fmt"Failed to show dependencies: {e.msg}"
+
+  mcpTool:
+    proc nimblePackageVersions(packageName: string): string {.gcsafe.} =
+      ## List available versions for a package
+      try:
+        withGenie:
+          let currentPath = getCurrentDir()
+          let nimbleResult = nimbleVersions(currentPath, packageName)
+          return formatNimbleOutput(nimbleResult)
+      except Exception as e:
+        return fmt"Failed to get package versions: {e.msg}"
+
+  mcpTool:
+    proc nimbleShowProject(property: string = ""): string {.gcsafe.} =
+      ## Display current project configuration
+      try:
+        withGenie:
+          let currentPath = getCurrentDir()
+          let nimbleResult = nimbleShow(currentPath, property)
+          return formatNimbleOutput(nimbleResult)
+      except Exception as e:
+        return fmt"Failed to show project info: {e.msg}"
+
+  mcpTool:
+    proc nimbleProjectStatus(): string {.gcsafe.} =
+      ## Check if current directory is a Nimble project and show status
+      try:
+        withGenie:
+          let currentPath = getCurrentDir()
+          if isNimbleProject(currentPath):
+            let nimbleFile = getNimbleFile(currentPath)
+            var statusInfo = %*{
+              "isNimbleProject": true,
+              "projectPath": currentPath,
+              "nimbleFile": nimbleFile.get(""),
+              "hasSymbolsIndexed": genie.projects.hasKey(currentPath)
+            }
+            
+            # Add dependency information
+            let depsResult = nimbleDeps(currentPath, false)
+            if depsResult.success:
+              statusInfo["dependencies"] = %depsResult.output
+              
+            return $statusInfo
+          else:
+            return $(%*{
+              "isNimbleProject": false,
+              "projectPath": currentPath,
+              "message": "Current directory is not a Nimble project. Use nimbleInitProject to create one."
+            })
+      except Exception as e:
+        return fmt"Failed to get project status: {e.msg}"
 
 proc handleFileResource(ctx: McpRequestContext, uri: string, params: Table[string, string]): McpResourceContents {.gcsafe.} =
   ## Handle file resource requests from registered directories

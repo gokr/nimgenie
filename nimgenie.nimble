@@ -11,5 +11,5 @@ bin           = @["nimgenie"]
 
 requires "nim >= 2.2.4"
 requires "file:///home/gokr/tankfeud/nimcp"
-requires "https://github.com/gokr/debby"
+requires "https://github.com/gokr/debby" # Adds DateTime support
 requires "curly"

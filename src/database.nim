@@ -1,5 +1,5 @@
-import std/[json, strutils, strformat, os, options]
-import debby/pools, debby/mysql
+import std/[json, strutils, strformat, os, options, times]
+import debby/pools, debby/mysql, debby/common
 
 type
   Symbol* = ref object
@@ -9,26 +9,26 @@ type
     module*: string
     filePath*: string    # Maps to file_path  
     line*: int
-    column*: int
-    signature*: Option[string]
-    documentation*: Option[string]
-    visibility*: Option[string]
-    createdAt*: string   # Maps to created_at
+    col*: int           # Renamed from 'column' to avoid SQL reserved word
+    signature*: string  # Simplified from Option[string]
+    documentation*: string  # Simplified from Option[string]
+    visibility*: string  # Simplified from Option[string]
+    created*: DateTime   # Use DateTime like tankfeudserver
   
   Module* = ref object
     id*: int
     name*: string
     filePath*: string          # Maps to file_path
-    lastModified*: Option[string]  # Maps to last_modified
-    documentation*: Option[string]
-    createdAt*: string         # Maps to created_at
+    lastModified*: DateTime    # Simplified to DateTime
+    documentation*: string     # Simplified from Option[string]
+    created*: DateTime         # Use DateTime like tankfeudserver
   
   RegisteredDirectory* = ref object
     id*: int
     path*: string
-    name*: Option[string]
-    description*: Option[string]
-    createdAt*: string  # Maps to created_at
+    name*: string              # Simplified from Option[string]
+    description*: string       # Simplified from Option[string]
+    created*: DateTime         # Use DateTime like tankfeudserver
 
   Database* = object
     pool*: Pool
@@ -45,24 +45,65 @@ proc newDatabase*(): Database =
   result.pool = newPool()
   for i in 0 ..< poolSize:
     result.pool.add openDatabase(database, host, port, user, password)
-  
-  # Create tables using Debby model definitions
+  echo "Opened"
+  # Create tables first, then indexes (following tankfeudserver patterns)
   result.pool.withDb:
+    echo fmt"withDb - current database: {database}"
+    
+    # Create tables first
     if not db.tableExists(Symbol):
+      echo "Creating Symbol table with Debby"
       db.createTable(Symbol)
-      # Create indexes for performance
-      db.createIndex(Symbol, "name")
-      db.createIndex(Symbol, "module")
-      db.createIndex(Symbol, "symbolType")
+      echo "Symbol table created"
+    else:
+      echo "Symbol table already exists"
     
     if not db.tableExists(Module):
+      echo "Creating Module table with Debby" 
       db.createTable(Module)
-      db.createIndex(Module, "name")
+      echo "Module table created"
+    else:
+      echo "Module table already exists"
     
     if not db.tableExists(RegisteredDirectory):
+      echo "Creating RegisteredDirectory table with Debby"
       db.createTable(RegisteredDirectory)
-      # Create index on path (limited length for TEXT columns)
-      db.query("CREATE INDEX IF NOT EXISTS idx_registered_dirs_path ON registered_directories (path(255))")
+      echo "RegisteredDirectory table created"
+    else:
+      echo "RegisteredDirectory table already exists"
+  
+  # Create indexes in separate transaction (following tankfeudserver patterns)
+  result.pool.withDb:
+    # Create indexes for Symbol table
+    if db.tableExists(Symbol):
+      echo "Creating indexes for symbols table"
+      # Use raw SQL for TEXT/VARCHAR columns to specify key length
+      db.query("CREATE INDEX IF NOT EXISTS idx_symbols_name ON symbol (name(255))")
+      echo "Created name index"
+      db.query("CREATE INDEX IF NOT EXISTS idx_symbols_module ON symbol (module(255))")
+      echo "Created module index"
+      db.query("CREATE INDEX IF NOT EXISTS idx_symbols_symbol_type ON symbol (symbol_type(255))")
+      echo "Created symbol_type index"
+      # Use Debby createIndex() for non-TEXT fields (integers)
+      try:
+        db.createIndex(Symbol, "line")
+        echo "Created line index"
+      except DbError:
+        echo "Line index already exists"
+    
+    # Create indexes for Module table  
+    if db.tableExists(Module):
+      echo "Creating indexes for modules table"
+      db.query("CREATE INDEX IF NOT EXISTS idx_modules_name ON module (name(255))")
+      echo "Created modules name index"
+    
+    # Create indexes for RegisteredDirectory table
+    if db.tableExists(RegisteredDirectory):
+      echo "Creating indexes for registered_directories table"
+      db.query("CREATE INDEX IF NOT EXISTS idx_registered_dirs_path ON registered_directory (path(255))")
+      echo "Created registered_directories path index"
+    
+    echo "Database initialization complete"
 
 proc closeDatabase*(db: Database) =
   ## Close the database connection pool
@@ -70,7 +111,7 @@ proc closeDatabase*(db: Database) =
     db.pool.close()
 
 proc insertSymbol*(db: Database, name, symbolType, module, filePath: string,
-                  line, column: int, signature = "", documentation = "", 
+                  line, col: int, signature = "", documentation = "", 
                   visibility = ""): int =
   ## Insert a symbol into the database and return its ID
   try:
@@ -80,10 +121,11 @@ proc insertSymbol*(db: Database, name, symbolType, module, filePath: string,
       module: module,
       filePath: filePath,
       line: line,
-      column: column,
-      signature: if signature == "": none(string) else: some(signature),
-      documentation: if documentation == "": none(string) else: some(documentation),
-      visibility: if visibility == "": none(string) else: some(visibility)
+      col: col,
+      signature: signature,
+      documentation: documentation,
+      visibility: visibility,
+      created: now()
     )
     db.pool.insert(symbol)
     return symbol.id
@@ -101,8 +143,8 @@ proc insertModule*(db: Database, name, filePath: string, lastModified: string = 
       # Update existing module
       let module = existing[0]
       module.filePath = filePath
-      module.lastModified = if lastModified == "": none(string) else: some(lastModified)
-      module.documentation = if documentation == "": none(string) else: some(documentation)
+      module.lastModified = now()
+      module.documentation = documentation
       db.pool.update(module)
       return module.id
     else:
@@ -110,8 +152,9 @@ proc insertModule*(db: Database, name, filePath: string, lastModified: string = 
       let module = Module(
         name: name,
         filePath: filePath,
-        lastModified: if lastModified == "": none(string) else: some(lastModified),
-        documentation: if documentation == "": none(string) else: some(documentation)
+        lastModified: now(),
+        documentation: documentation,
+        created: now()
       )
       db.pool.insert(module)
       return module.id
@@ -148,10 +191,10 @@ proc searchSymbols*(db: Database, query: string, symbolType: string = "",
         "module": symbol.module,
         "file_path": symbol.filePath,
         "line": symbol.line,
-        "column": symbol.column,
-        "signature": if symbol.signature.isSome: symbol.signature.get else: "",
-        "documentation": if symbol.documentation.isSome: symbol.documentation.get else: "",
-        "visibility": if symbol.visibility.isSome: symbol.visibility.get else: ""
+        "column": symbol.col,  # Keep "column" in JSON output for external compatibility
+        "signature": symbol.signature,
+        "documentation": symbol.documentation,
+        "visibility": symbol.visibility
       }
       result.add(symbolObj)
       
@@ -184,10 +227,10 @@ proc getSymbolInfo*(db: Database, symbolName: string, moduleName: string = ""): 
         "module": symbol.module, 
         "file_path": symbol.filePath,
         "line": symbol.line,
-        "column": symbol.column,
-        "signature": if symbol.signature.isSome: symbol.signature.get else: "",
-        "documentation": if symbol.documentation.isSome: symbol.documentation.get else: "",
-        "visibility": if symbol.visibility.isSome: symbol.visibility.get else: ""
+        "column": symbol.col,  # Keep "column" in JSON output for external compatibility
+        "signature": symbol.signature,
+        "documentation": symbol.documentation,
+        "visibility": symbol.visibility
       }
     else:
       # Multiple matches, return all
@@ -199,10 +242,10 @@ proc getSymbolInfo*(db: Database, symbolName: string, moduleName: string = ""): 
           "module": symbol.module,
           "file_path": symbol.filePath, 
           "line": symbol.line,
-          "column": symbol.column,
-          "signature": if symbol.signature.isSome: symbol.signature.get else: "",
-          "documentation": if symbol.documentation.isSome: symbol.documentation.get else: "",
-          "visibility": if symbol.visibility.isSome: symbol.visibility.get else: ""
+          "column": symbol.col,  # Keep "column" in JSON output for external compatibility
+          "signature": symbol.signature,
+          "documentation": symbol.documentation,
+          "visibility": symbol.visibility
         }
         result.add(symbolObj)
         
@@ -265,15 +308,16 @@ proc addRegisteredDirectory*(db: Database, path: string, name: string = "", desc
     if existing.len > 0:
       # Update existing directory
       let directory = existing[0]
-      directory.name = if displayName == "": none(string) else: some(displayName)
-      directory.description = if description == "": none(string) else: some(description)
+      directory.name = displayName
+      directory.description = description
       db.pool.update(directory)
     else:
       # Insert new directory
       let directory = RegisteredDirectory(
         path: path,
-        name: if displayName == "": none(string) else: some(displayName),
-        description: if description == "": none(string) else: some(description)
+        name: displayName,
+        description: description,
+        created: now()
       )
       db.pool.insert(directory)
     
@@ -302,9 +346,9 @@ proc getRegisteredDirectories*(db: Database): JsonNode =
     for directory in directories:
       let dirObj = %*{
         "path": directory.path,
-        "name": if directory.name.isSome: directory.name.get else: "",
-        "description": if directory.description.isSome: directory.description.get else: "",
-        "created_at": directory.createdAt
+        "name": directory.name,
+        "description": directory.description,
+        "created_at": $directory.created
       }
       result.add(dirObj)
       
