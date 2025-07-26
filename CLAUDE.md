@@ -271,6 +271,8 @@ nimgenie/
 ```
 
 ## Technical Dependencies
+
+### Core Dependencies
 - **nimcp**: MCP server framework (https://github.com/gokr/nimcp)
 - **debby/mysql**: MySQL database with connection pooling for persistent symbol storage
 - **json**: JSON parsing for nim compiler output
@@ -279,9 +281,26 @@ nimgenie/
 - **times**: DateTime handling for project timestamps
 - **strutils, sequtils**: String and sequence utilities
 
+### Database Requirements
+- **Production**: MySQL 5.7+ or MariaDB 10.3+ with InnoDB engine
+- **Development/Testing**: TiDB 6.0+ (MySQL-compatible distributed database)
+  - Easy setup via TiUP: `tiup playground`
+  - No complex installation or configuration required
+  - Automatic schema creation and migration support
+  - Compatible with all MySQL features used by NimGenie
+
+### Why TiDB for Development?
+- **Zero Configuration**: Single command startup with `tiup playground`
+- **MySQL Compatibility**: 100% compatible with our Debby/MySQL code
+- **Development Speed**: No need to install and configure MySQL locally
+- **Testing Isolation**: Easy to create/destroy test databases
+- **Production Ready**: Can scale to production if needed
+
 ## Development Commands
 
-### MySQL Configuration
+### Database Configuration
+
+#### Production MySQL Setup
 Set up your MySQL database connection via environment variables:
 ```bash
 export MYSQL_HOST=localhost
@@ -291,6 +310,25 @@ export MYSQL_PASSWORD=your_password
 export MYSQL_DATABASE=nimgenie
 export MYSQL_POOL_SIZE=10
 ```
+
+#### Development with TiDB
+For development and testing, we use TiDB which provides MySQL compatibility with easier setup:
+
+```bash
+# Install TiUP (TiDB cluster management tool)
+curl --proto '=https' --tlsv1.2 -sSf https://tiup-mirrors.pingcap.com/install.sh | sh
+
+# Start TiDB playground (includes TiDB, TiKV, PD)
+tiup playground
+
+# TiDB runs on default settings:
+# - Host: 127.0.0.1
+# - Port: 4000
+# - User: root
+# - Password: (empty)
+```
+
+The test suite automatically detects TiDB availability and runs database tests when available.
 
 ### Build
 ```bash
@@ -305,6 +343,49 @@ nimble build
 ### Test with specific project
 ```bash
 ./nimgenie --project=/path/to/nim/project
+```
+
+### Testing
+
+#### Running Tests
+```bash
+# Run all tests (database tests will be skipped if TiDB not available)
+nimble test
+
+# Run tests with TiDB available (requires tiup playground running)
+tiup playground &  # Start TiDB in background
+nimble test        # All tests including database tests will run
+```
+
+#### Test Architecture
+The test suite is designed to work with both local development and CI environments:
+
+- **Database Tests**: Use TiDB for MySQL compatibility testing
+- **Conditional Execution**: Database tests are automatically skipped if TiDB is not available
+- **Test Isolation**: Each test creates a unique database to avoid conflicts
+- **Cleanup**: Automatic cleanup of test databases after each test suite
+
+#### Test Database Connection
+Tests use these TiDB default settings:
+```nim
+# Automatically configured for tests
+MYSQL_HOST=127.0.0.1
+MYSQL_PORT=4000
+MYSQL_USER=root
+MYSQL_PASSWORD=
+MYSQL_DATABASE=nimgenie_test_{timestamp}  # Unique per test run
+MYSQL_POOL_SIZE=5  # Smaller pool for tests
+```
+
+#### Test File Structure
+```
+tests/
+├── test_utils.nim              # TiDB connection utilities
+├── test_directory_resources.nim    # Database-backed directory management
+├── test_directory_resources_simple.nim  # Core database operations
+├── test_mcp_tools.nim          # MCP tool handlers with database
+├── test_screenshot_workflow.nim    # File workflow tests
+└── test_*.nim.disabled         # Disabled legacy tests
 ```
 
 This architecture provides the foundation for a powerful, scalable MCP tool that makes Nim development more accessible to AI assistants while leveraging the full power of the Nim toolchain.

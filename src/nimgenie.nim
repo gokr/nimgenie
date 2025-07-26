@@ -3,6 +3,7 @@ import std/[json, tables, strutils, os, strformat, algorithm, mimetypes, base64,
 import database
 import indexer
 import analyzer
+import nimble
 
 type
   NimProject* = object
