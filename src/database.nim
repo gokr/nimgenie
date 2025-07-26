@@ -45,65 +45,36 @@ proc newDatabase*(): Database =
   result.pool = newPool()
   for i in 0 ..< poolSize:
     result.pool.add openDatabase(database, host, port, user, password)
-  echo "Opened"
   # Create tables first, then indexes (following tankfeudserver patterns)
-  result.pool.withDb:
-    echo fmt"withDb - current database: {database}"
-    
+  result.pool.withDb:    
     # Create tables first
     if not db.tableExists(Symbol):
-      echo "Creating Symbol table with Debby"
-      db.createTable(Symbol)
-      echo "Symbol table created"
-    else:
-      echo "Symbol table already exists"
-    
+      db.createTable(Symbol)    
     if not db.tableExists(Module):
-      echo "Creating Module table with Debby" 
       db.createTable(Module)
-      echo "Module table created"
-    else:
-      echo "Module table already exists"
-    
     if not db.tableExists(RegisteredDirectory):
-      echo "Creating RegisteredDirectory table with Debby"
       db.createTable(RegisteredDirectory)
-      echo "RegisteredDirectory table created"
-    else:
-      echo "RegisteredDirectory table already exists"
   
   # Create indexes in separate transaction (following tankfeudserver patterns)
   result.pool.withDb:
     # Create indexes for Symbol table
     if db.tableExists(Symbol):
-      echo "Creating indexes for symbols table"
       # Use raw SQL for TEXT/VARCHAR columns to specify key length
       db.query("CREATE INDEX IF NOT EXISTS idx_symbols_name ON symbol (name(255))")
-      echo "Created name index"
       db.query("CREATE INDEX IF NOT EXISTS idx_symbols_module ON symbol (module(255))")
-      echo "Created module index"
       db.query("CREATE INDEX IF NOT EXISTS idx_symbols_symbol_type ON symbol (symbol_type(255))")
-      echo "Created symbol_type index"
       # Use Debby createIndex() for non-TEXT fields (integers)
       try:
         db.createIndex(Symbol, "line")
-        echo "Created line index"
       except DbError:
-        echo "Line index already exists"
+        discard
     
     # Create indexes for Module table  
     if db.tableExists(Module):
-      echo "Creating indexes for modules table"
-      db.query("CREATE INDEX IF NOT EXISTS idx_modules_name ON module (name(255))")
-      echo "Created modules name index"
-    
+      db.query("CREATE INDEX IF NOT EXISTS idx_modules_name ON module (name(255))")    
     # Create indexes for RegisteredDirectory table
     if db.tableExists(RegisteredDirectory):
-      echo "Creating indexes for registered_directories table"
       db.query("CREATE INDEX IF NOT EXISTS idx_registered_dirs_path ON registered_directory (path(255))")
-      echo "Created registered_directories path index"
-    
-    echo "Database initialization complete"
 
 proc closeDatabase*(db: Database) =
   ## Close the database connection pool

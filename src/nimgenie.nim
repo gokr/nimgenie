@@ -149,12 +149,163 @@ proc encodeFileAsBase64*(filePath: string): string =
   let content = readFile(filePath)
   return encode(content)
 
+# Dependency indexing helper functions
+
+proc resolveDependencyPath*(genie: var NimGenie, packageName: string): Option[string] =
+  ## Resolve the source path for a dependency package
+  # First check our discovered packages
+  if packageName in genie.nimblePackages:
+    return some(genie.nimblePackages[packageName])
+  
+  # Try to find in standard Nimble locations
+  let homeDir = getHomeDir()
+  let nimblePkgDirs = @[
+    homeDir / ".nimble" / "pkgs",
+    homeDir / ".nimble" / "pkgs2",
+    "/usr/lib/nim",
+    "/usr/local/lib/nim"
+  ]
+  
+  for pkgDir in nimblePkgDirs:
+    if dirExists(pkgDir):
+      for kind, path in walkDir(pkgDir):
+        if kind == pcDir:
+          let dirName = extractFilename(path)
+          # Handle both versioned (package-1.0.0) and unversioned (package) directory names
+          if dirName == packageName or dirName.startsWith(packageName & "-"):
+            return some(path)
+  
+  return none(string)
+
+proc parseDependencyNames*(dumpOutput: string): seq[string] =
+  ## Parse dependency names from nimble dump output
+  result = @[]
+  
+  try:
+    # Nimble dump can output various formats, try to parse JSON first
+    if dumpOutput.strip().startsWith("{"):
+      let dumpJson = parseJson(dumpOutput)
+      if dumpJson.hasKey("requires"):
+        for req in dumpJson["requires"]:
+          if req.kind == JString:
+            let reqStr = req.getStr()
+            # Extract package name from requirement (e.g., "nim >= 1.0.0" -> "nim")
+            let packageName = reqStr.split(" ")[0].split("@")[0]
+            if packageName != "nim" and packageName.len > 0:
+              result.add(packageName)
+    else:
+      # Parse text-based output
+      for line in dumpOutput.splitLines():
+        if line.startsWith("Requires:") or line.contains("depends on"):
+          # Extract package names from various dependency line formats
+          let parts = line.split()
+          for part in parts:
+            if part.len > 0 and not part.startsWith("-") and not part.contains(":"):
+              let cleanName = part.split("@")[0].split(">=")[0].split("<=")[0].split("=")[0]
+              if cleanName != "nim" and cleanName.len > 0 and cleanName notin result:
+                result.add(cleanName)
+  except:
+    # If JSON parsing fails, try to extract package names from text
+    for line in dumpOutput.splitLines():
+      let trimmed = line.strip()
+      if trimmed.len > 0 and not trimmed.startsWith("#") and not trimmed.contains(":"):
+        let packageName = trimmed.split(" ")[0].split("@")[0]
+        if packageName != "nim" and packageName.len > 0 and packageName notin result:
+          result.add(packageName)
+
+proc indexProjectDependencies*(genie: var NimGenie, projectPath: string): string =
+  ## Index all dependencies of the current project
+  var dependencyResults: seq[string] = @[]
+  var totalDependencySymbols = 0
+  var successfulDeps = 0
+  var failedDeps: seq[string] = @[]
+  
+  try:
+    # Get dependency information
+    let dumpResult = nimbleDump(projectPath)
+    if not dumpResult.success:
+      return fmt"Could not get dependency information: {dumpResult.errorMsg}"
+    
+    let dependencyNames = parseDependencyNames(dumpResult.output)
+    if dependencyNames.len == 0:
+      return "No dependencies found to index"
+    
+    echo fmt"Found {dependencyNames.len} dependencies to index: " & dependencyNames.join(", ")
+    
+    # Index each dependency
+    for depName in dependencyNames:
+      echo fmt"Processing dependency: {depName}"
+      
+      let depPathOpt = resolveDependencyPath(genie, depName)
+      if depPathOpt.isNone():
+        failedDeps.add(fmt"{depName} (path not found)")
+        echo fmt"✗ Could not find source path for dependency: {depName}"
+        continue
+      
+      let depPath = depPathOpt.get()
+      echo fmt"Found dependency {depName} at: {depPath}"
+      
+      # Create indexer for the dependency
+      let depIndexer = newIndexer(genie.database, depPath)
+      
+      # Index the dependency (but don't clear existing symbols)
+      try:
+        echo fmt"Indexing dependency: {depName}"
+        let nimFiles = depIndexer.findNimFiles()
+        
+        if nimFiles.len == 0:
+          failedDeps.add(fmt"{depName} (no .nim files found)")
+          continue
+        
+        var depSymbolCount = 0
+        var fileCount = 0
+        
+        # Index files from this dependency
+        for filePath in nimFiles:
+          let (success, symbolCount) = depIndexer.indexSingleFile(filePath)
+          if success:
+            depSymbolCount += symbolCount
+            inc fileCount
+        
+        if depSymbolCount > 0:
+          inc successfulDeps
+          totalDependencySymbols += depSymbolCount
+          dependencyResults.add(fmt"✓ {depName}: {depSymbolCount} symbols from {fileCount} files")
+          echo fmt"✓ Successfully indexed {depName}: {depSymbolCount} symbols"
+        else:
+          failedDeps.add(fmt"{depName} (no symbols extracted)")
+          
+      except Exception as e:
+        failedDeps.add(fmt"{depName} (error: {e.msg})")
+        echo fmt"✗ Error indexing dependency {depName}: {e.msg}"
+    
+    # Build summary
+    var summary = fmt"""
+Dependency indexing completed:
+- Dependencies found: {dependencyNames.len}
+- Successfully indexed: {successfulDeps}
+- Total dependency symbols: {totalDependencySymbols}
+"""
+    
+    if dependencyResults.len > 0:
+      summary.add("\nSuccessfully indexed dependencies:\n")
+      summary.add(dependencyResults.join("\n"))
+    
+    if failedDeps.len > 0:
+      summary.add(fmt"\n\nFailed to index ({failedDeps.len}):\n")
+      summary.add(failedDeps.join("\n"))
+    
+    return summary
+    
+  except Exception as e:
+    return fmt"Dependency indexing failed: {e.msg}"
+
 
 let server = mcpServer("nimgenie", "0.1.0"):
 
   mcpTool:
     proc indexCurrentProject(): string {.gcsafe.} =
-      ## Index the current project using nim doc --index
+      ## Index the current project and all its dependencies
       try:
         withGenie:
           # Get or create current project
@@ -166,15 +317,61 @@ let server = mcpServer("nimgenie", "0.1.0"):
               lastIndexed: now()
             )
           
+          # Index the main project first
+          echo "=== Indexing Main Project ==="
           let indexer = newIndexer(genie.database, currentPath)
-          let indexResult = indexer.indexProject()
+          let projectResult = indexer.indexProject()
+          
+          # Index project dependencies
+          echo "\n=== Indexing Project Dependencies ==="
+          let dependencyResult = indexProjectDependencies(genie, currentPath)
           
           # Clear cache after reindexing
           genie.symbolCache.clear()
           
-          return indexResult
+          # Combine results
+          var combinedResult = fmt"""
+=== Project Indexing Complete ===
+
+Main Project Results:
+{projectResult}
+
+Dependency Results:
+{dependencyResult}
+
+=== Summary ===
+Project and all dependencies have been indexed successfully.
+Use searchSymbols to search across all indexed code.
+"""
+          
+          return combinedResult
       except Exception as e:
         return fmt"Failed to index project: {e.msg}"
+        
+  mcpTool:
+    proc indexProjectDependenciesOnly(): string {.gcsafe.} =
+      ## Index only the project dependencies (without re-indexing the main project)
+      try:
+        withGenie:
+          let currentPath = getCurrentDir()
+          echo "=== Indexing Project Dependencies Only ==="
+          let dependencyResult = indexProjectDependencies(genie, currentPath)
+          
+          # Clear cache after indexing
+          genie.symbolCache.clear()
+          
+          return fmt"""
+=== Dependency Indexing Complete ===
+
+{dependencyResult}
+
+=== Summary ===
+Project dependencies have been indexed.
+Main project symbols remain unchanged.
+Use searchSymbols to search across all indexed code.
+"""
+      except Exception as e:
+        return fmt"Failed to index dependencies: {e.msg}"
         
   mcpTool:
     proc searchSymbols(query: string, symbolType: string = "", moduleName: string = ""): string {.gcsafe.} =
