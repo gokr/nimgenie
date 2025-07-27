@@ -49,64 +49,40 @@ type
 - **Active project symbols** - current working directory symbols
 - **Recent queries cache** - LRU cache of search results
 
-#### TiDB Schema (automatically generated from Debby Models):
-Tables are created automatically using `db.createTable(ModelType)`. The resulting schema:
-```sql
-CREATE TABLE symbols (
-  id INT AUTO_INCREMENT PRIMARY KEY,
-  name VARCHAR(255) NOT NULL,
-  symbol_type VARCHAR(100) NOT NULL,
-  module VARCHAR(255) NOT NULL,  
-  file_path TEXT NOT NULL,
-  line INT NOT NULL,
-  column INT NOT NULL,
-  signature TEXT,
-  documentation TEXT,
-  visibility VARCHAR(50),
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  INDEX idx_symbols_name (name),
-  INDEX idx_symbols_module (module),
-  INDEX idx_symbols_type (symbol_type),
-  INDEX idx_symbols_file (file_path(255))
-);
-
-CREATE TABLE modules (
-  id INT AUTO_INCREMENT PRIMARY KEY,
-  name VARCHAR(255) UNIQUE NOT NULL,
-  file_path TEXT NOT NULL,
-  last_modified TIMESTAMP NULL,
-  documentation TEXT,
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  INDEX idx_modules_name (name),
-  INDEX idx_modules_path (file_path(255))
-);
-
-CREATE TABLE registered_directories (
-  id INT AUTO_INCREMENT PRIMARY KEY,
-  path TEXT UNIQUE NOT NULL,
-  name VARCHAR(255),
-  description TEXT,
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  INDEX idx_registered_dirs_path (path(255))
-);
-```
+#### Database Schema:
+Tables are created automatically using `db.createTable(ModelType)` based on the Nim type definitions. The database schema includes tables for symbols, modules, and registered directories with appropriate indexes for efficient querying.
 
 #### Debby Model Definitions:
 ```nim
 type
   Symbol* = ref object
     id*: int
-    name*: string
-    symbolType*: string  # Maps to symbol_type via snake_case conversion
+    name*: string  
+    symbolType*: string     # Maps to symbol_type
     module*: string
-    filePath*: string    # Maps to file_path
+    filePath*: string       # Maps to file_path  
     line*: int
-    column*: int
-    signature*: Option[string]
-    documentation*: Option[string]
-    visibility*: Option[string]
-    createdAt*: string   # Maps to created_at
+    col*: int              # Renamed from 'column' to avoid SQL reserved word
+    signature*: string     # Simplified from Option[string]
+    documentation*: string # Simplified from Option[string]
+    visibility*: string    # Simplified from Option[string]
+    created*: DateTime     # DateTime for consistency
   
+  Module* = ref object
+    id*: int
+    name*: string
+    filePath*: string          # Maps to file_path
+    lastModified*: DateTime    # DateTime type
+    documentation*: string     # Simplified from Option[string]
+    created*: DateTime         # DateTime for consistency
+  
+  RegisteredDirectory* = ref object
+    id*: int
+    path*: string
+    name*: string              # Simplified from Option[string]
+    description*: string       # Simplified from Option[string]
+    created*: DateTime         # DateTime for consistency
+
   Database* = object
     pool*: Pool  # Thread-safe connection pool
 ```
@@ -136,7 +112,7 @@ type
 
 ### Database Layer: Working with Debby
 
-**Debby ORM Integration Patterns Following tankfeudserver:**
+**Debby ORM Integration Patterns:**
 
 #### Connection Pool Management:
 ```nim
@@ -156,7 +132,7 @@ proc newDatabase*(): Database =
 
 #### Database Operations Patterns:
 ```nim
-# Table creation (following tankfeudserver patterns)
+# Table creation with Debby ORM
 proc newDatabase*(): Database =
   # ... connection setup ...
   result.pool.withDb:
@@ -210,9 +186,10 @@ proc clearSymbols*(db: Database, moduleName: string = "") =
 ```
 
 #### Field Mapping Conventions:
-- **Automatic snake_case**: Nim `symbolType` → Tidb `symbol_type`
+- **Automatic snake_case**: Nim `symbolType` → TiDB `symbol_type`
 - **Explicit mapping**: Use descriptive Nim names, let Debby handle DB columns
-- **Optional fields**: Use `Option[T]` for nullable database columns
+- **Simplified types**: Use simple `string` and `DateTime` types instead of Option types
+- **Reserved word avoidance**: Use `col` instead of `column` to avoid SQL reserved words
 - **Primary keys**: Always `id*: int` for auto-increment columns
 
 #### Configuration Environment Variables:
@@ -310,14 +287,17 @@ proc clearSymbols*(db: Database, moduleName: string = "") =
 ```
 nimgenie/
 ├── CLAUDE.md            # This file - project documentation
+├── README.md            # User-facing documentation and setup guide
+├── TUTORIAL.md          # Tutorial for using NimGenie
 ├── nimgenie.nimble      # Package definition
 ├── src/
-│   ├── nimgenie.nim     # Main MCP server
-│   ├── indexer.nim      # Indexing logic and SQLite operations
+│   ├── nimgenie.nim     # Main MCP server with tools and resource handlers
+│   ├── database.nim     # TiDB database schema and operations
+│   ├── indexer.nim      # Nim project indexing logic
 │   ├── analyzer.nim     # Code analysis tools and nim exec wrappers
-│   ├── cache.nim        # In-memory caching system
-│   └── database.nim     # Database schema and operations
-└── README.md
+│   ├── nimble.nim       # Nimble package management operations
+│   └── configuration.nim # Configuration type definitions
+└── tests/               # Test suite with database integration tests
 ```
 
 ## Technical Dependencies
