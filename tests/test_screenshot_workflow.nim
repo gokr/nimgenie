@@ -1,6 +1,6 @@
-## Comprehensive test for screenshots directory registration and MCP resource workflow
-## Tests the complete integration between Nimgenie's directory resource system and MCP client usage
-## Validates: directory registration -> screenshot file creation -> MCP resource request -> file serving
+## Comprehensive screenshot workflow tests
+## Tests screenshot creation, directory management, and file serving capabilities
+## Consolidates all screenshot-related testing into a single comprehensive test suite
 
 import unittest, json, os, strutils, times, tables, base64, random, strformat, httpclient
 import ../src/database
@@ -69,15 +69,15 @@ proc makeToolCall(client: var McpClient, toolName: string, arguments: JsonNode =
     "arguments": arguments
   }
   
-  let result = client.makeRequest("tools/call", params)
+  let res = client.makeRequest("tools/call", params)
   
   # Extract content from tool result
-  if result.hasKey("content") and result["content"].kind == JArray and result["content"].len > 0:
-    let content = result["content"][0]
+  if res.hasKey("content") and res["content"].kind == JArray and res["content"].len > 0:
+    let content = res["content"][0]
     if content.hasKey("text"):
       return content["text"].getStr()
   
-  return $result
+  return $res
 
 proc requestResource(client: var McpClient, uri: string): JsonNode =
   ## Request a resource from the MCP server
@@ -126,16 +126,7 @@ proc findAvailablePort(): int =
 #     # Note: In production we'd want a graceful shutdown mechanism
 #     # For testing, we let the thread finish naturally
     
-proc createMockPngFile(filePath: string) =
-  ## Create a small valid PNG file for testing
-  let pngData = "\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde\x00\x00\x00\tpHYs\x00\x00\x0b\x13\x00\x00\x0b\x13\x01\x00\x9a\x9c\x18\x00\x00\x00\nIDATx\x9cc\x00\x01\x00\x00\x05\x00\x01\r\n-\xdb\x00\x00\x00\x00IEND\xaeB`\x82"
-  writeFile(filePath, pngData)
-
-proc createMockScreenshot(screenshotDir: string, filename: string): string =
-  ## Simulate taking a screenshot by creating a mock PNG file
-  let fullPath = screenshotDir / filename
-  createMockPngFile(fullPath)
-  return fullPath
+# Mock PNG creation utilities are now in test_utils
 
 suite "Screenshot Workflow Integration Tests":
   
@@ -296,6 +287,112 @@ suite "Screenshot Workflow Error Handling Tests":
       let testFile = screenshotDir / "test.png"
       check not fileExists(testFile)
 
+suite "Directory Registration and Screenshot Integration Tests":
+  
+  var testTempDir: string
+  var screenshotDir: string
+  var testDb: Database
+  
+  setup:
+    requireTiDB:
+      testTempDir = getTempDir() / "nimgenie_dir_screenshot_test_" & $getTime().toUnix() 
+      screenshotDir = testTempDir / "screenshots"
+      createDir(testTempDir)
+      createDir(screenshotDir)
+      testDb = createTestDatabase()
+    
+  teardown:
+    cleanupTestDatabase(testDb)
+    if dirExists(testTempDir):
+      removeDir(testTempDir)
+
+  test "Directory registration with screenshot files":
+    requireTiDB:
+      # Create screenshot files
+      let screenshot1 = createMockScreenshot(screenshotDir, "game_state_001.png")
+      let screenshot2 = createMockScreenshot(screenshotDir, "error_screen.png")
+      
+      # Register screenshots directory
+      let success = testDb.addRegisteredDirectory(screenshotDir, "Game Screenshots", "Test screenshots")
+      check success == true
+      
+      # Retrieve registered directories
+      let dirs = testDb.getRegisteredDirectories()
+      check dirs.kind == JArray
+      check dirs.len == 1
+      
+      let entry = dirs[0]
+      check entry["path"].getStr() == screenshotDir.normalizedPath().absolutePath()
+      check entry["name"].getStr() == "Game Screenshots"
+      check entry["description"].getStr() == "Test screenshots"
+      
+      # Verify files still exist in registered directory
+      check fileExists(screenshot1)
+      check fileExists(screenshot2)
+      
+      # Test MIME type detection
+      check detectMimeType(screenshot1) == "image/png"
+      check detectMimeType(screenshot2) == "image/png"
+      
+      # Test image file detection
+      check isImageFile(screenshot1) == true
+      check isImageFile(screenshot2) == true
+
+  test "Mixed file types with directory registration":
+    requireTiDB:
+      # Create different file types in screenshots directory
+      let pngFile = createMockScreenshot(screenshotDir, "screenshot.png")
+      
+      let txtFile = screenshotDir / "screenshot_log.txt"
+      writeFile(txtFile, "Screenshot taken at 2023-12-01 15:30:45\nResolution: 1920x1080")
+      
+      let jsonFile = screenshotDir / "screenshot_metadata.json"
+      writeFile(jsonFile, """{"file": "screenshot.png", "timestamp": "2023-12-01T15:30:45Z"}""")
+      
+      # Register directory
+      let success = testDb.addRegisteredDirectory(screenshotDir, "Mixed Screenshots", "Screenshots with metadata")
+      check success == true
+      
+      # Test MIME type detection for each
+      check detectMimeType(pngFile) == "image/png"
+      check detectMimeType(txtFile) == "text/plain"
+      check detectMimeType(jsonFile) == "application/json"
+      
+      # Test image detection
+      check isImageFile(pngFile) == true
+      check isImageFile(txtFile) == false
+      check isImageFile(jsonFile) == false
+      
+      # Test base64 encoding for PNG file
+      let encoded = encodeFileAsBase64(pngFile)
+      check encoded.len > 0
+      check not ("\x89PNG" in encoded)  # Should not contain raw PNG signature
+
+  test "Nested directory structure with registration":
+    requireTiDB:
+      # Create nested screenshot structure
+      let subDir = screenshotDir / "level1"
+      createDir(subDir)
+      
+      let mainScreenshot = createMockScreenshot(screenshotDir, "main_menu.png")
+      let levelScreenshot = createMockScreenshot(subDir, "boss_fight.png")
+      
+      # Register main screenshots directory
+      let success = testDb.addRegisteredDirectory(screenshotDir, "Game Screenshots", "Main screenshot directory")
+      check success == true
+      
+      # List directory files
+      let files = listDirectoryFiles(screenshotDir)
+      check files.len == 2
+      check "main_menu.png" in files
+      check ("level1/boss_fight.png" in files or "level1\\boss_fight.png" in files)  # Handle Windows paths
+      
+      # Verify both screenshots exist and are valid
+      check fileExists(mainScreenshot)
+      check fileExists(levelScreenshot)
+      check readFile(mainScreenshot).startsWith("\x89PNG")
+      check readFile(levelScreenshot).startsWith("\x89PNG")
+
 when isMainModule:
   # Allow running this test directly
-  echo "Running screenshot workflow tests..."
+  echo "Running comprehensive screenshot workflow tests..."

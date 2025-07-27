@@ -139,35 +139,36 @@ proc searchSymbols*(db: Database, query: string, symbolType: string = "",
   result = newJArray()
   
   try:
-    # Build SQL query for LIKE search with conditional filters
-    var sqlQuery = "SELECT * FROM symbols WHERE name LIKE ?"
-    var params: seq[string] = @[fmt"%{query}%"]
-    
-    if symbolType != "":
-      sqlQuery.add(" AND symbol_type = ?")
-      params.add(symbolType)
+    db.pool.withDb:
+      # Build SQL query for LIKE search with conditional filters using string formatting for now
+      var sqlQuery = "SELECT * FROM symbol WHERE 1=1"
       
-    if moduleName != "":
-      sqlQuery.add(" AND module = ?")
-      params.add(moduleName)
-    
-    sqlQuery.add(" ORDER BY name LIMIT 100")
-    
-    let symbols = db.pool.query(Symbol, sqlQuery, params)
-    
-    for symbol in symbols:
-      let symbolObj = %*{
-        "name": symbol.name,
-        "type": symbol.symbolType, 
-        "module": symbol.module,
-        "file_path": symbol.filePath,
-        "line": symbol.line,
-        "column": symbol.col,  # Keep "column" in JSON output for external compatibility
-        "signature": symbol.signature,
-        "documentation": symbol.documentation,
-        "visibility": symbol.visibility
-      }
-      result.add(symbolObj)
+      if query != "":
+        sqlQuery.add(fmt" AND name LIKE '%{query}%'")
+      
+      if symbolType != "":
+        sqlQuery.add(fmt" AND symbol_type = '{symbolType}'")
+        
+      if moduleName != "":
+        sqlQuery.add(fmt" AND module = '{moduleName}'")
+      
+      sqlQuery.add(" ORDER BY name LIMIT 100")
+      
+      let rows = db.query(sqlQuery)
+      
+      for row in rows:
+        let symbolObj = %*{
+          "name": row[1],        # name field
+          "type": row[2],        # symbol_type field  
+          "module": row[3],      # module field
+          "file_path": row[4],   # file_path field
+          "line": parseInt(row[5]),     # line field
+          "column": parseInt(row[6]),   # col field
+          "signature": row[7],   # signature field
+          "documentation": row[8], # documentation field
+          "visibility": row[9]   # visibility field
+        }
+        result.add(symbolObj)
       
   except Exception as e:
     echo "Database error searching symbols: ", e.msg
@@ -176,49 +177,48 @@ proc searchSymbols*(db: Database, query: string, symbolType: string = "",
 proc getSymbolInfo*(db: Database, symbolName: string, moduleName: string = ""): JsonNode =
   ## Get detailed information about a specific symbol
   try:
-    var sqlQuery = "SELECT * FROM symbols WHERE name = ?"
-    var params: seq[string] = @[symbolName]
-    
-    if moduleName != "":
-      sqlQuery.add(" AND module = ?")
-      params.add(moduleName)
-    
-    sqlQuery.add(" ORDER BY module")
-    
-    let symbols = db.pool.query(Symbol, sqlQuery, params)
-    
-    if symbols.len == 0:
-      return %*{"error": fmt"Symbol '{symbolName}' not found"}
-    
-    if symbols.len == 1:
-      let symbol = symbols[0]
-      return %*{
-        "name": symbol.name,
-        "type": symbol.symbolType,
-        "module": symbol.module, 
-        "file_path": symbol.filePath,
-        "line": symbol.line,
-        "column": symbol.col,  # Keep "column" in JSON output for external compatibility
-        "signature": symbol.signature,
-        "documentation": symbol.documentation,
-        "visibility": symbol.visibility
-      }
-    else:
-      # Multiple matches, return all
-      result = newJArray()
-      for symbol in symbols:
-        let symbolObj = %*{
-          "name": symbol.name,
-          "type": symbol.symbolType,
-          "module": symbol.module,
-          "file_path": symbol.filePath, 
-          "line": symbol.line,
-          "column": symbol.col,  # Keep "column" in JSON output for external compatibility
-          "signature": symbol.signature,
-          "documentation": symbol.documentation,
-          "visibility": symbol.visibility
+    db.pool.withDb:
+      var sqlQuery = fmt"SELECT * FROM symbol WHERE name = '{symbolName}'"
+      
+      if moduleName != "":
+        sqlQuery.add(fmt" AND module = '{moduleName}'")
+      
+      sqlQuery.add(" ORDER BY module")
+      
+      let rows = db.query(sqlQuery)
+      
+      if rows.len == 0:
+        return %*{"error": fmt"Symbol '{symbolName}' not found"}
+      
+      if rows.len == 1:
+        let row = rows[0]
+        return %*{
+          "name": row[1],
+          "type": row[2],
+          "module": row[3], 
+          "file_path": row[4],
+          "line": parseInt(row[5]),
+          "column": parseInt(row[6]),
+          "signature": row[7],
+          "documentation": row[8],
+          "visibility": row[9]
         }
-        result.add(symbolObj)
+      else:
+        # Multiple matches, return all
+        result = newJArray()
+        for row in rows:
+          let symbolObj = %*{
+            "name": row[1],
+            "type": row[2],
+            "module": row[3],
+            "file_path": row[4], 
+            "line": parseInt(row[5]),
+            "column": parseInt(row[6]),
+            "signature": row[7],
+            "documentation": row[8],
+            "visibility": row[9]
+          }
+          result.add(symbolObj)
         
   except Exception as e:
     echo "Database error getting symbol info: ", e.msg
@@ -229,10 +229,10 @@ proc clearSymbols*(db: Database, moduleName: string = "") =
   try:
     if moduleName == "":
       db.pool.withDb:
-        discard db.query("DELETE FROM symbols")
+        discard db.query("DELETE FROM symbol")
     else:
       db.pool.withDb:
-        discard db.query("DELETE FROM symbols WHERE module = ?", moduleName)
+        discard db.query("DELETE FROM symbol WHERE module = ?", moduleName)
   except Exception as e:
     echo "Database error clearing symbols: ", e.msg
 
@@ -240,11 +240,11 @@ proc getProjectStats*(db: Database): JsonNode =
   ## Get statistics about the indexed project
   try:
     db.pool.withDb:
-      let symbolCountRows = db.query("SELECT COUNT(*) FROM symbols")
-      let moduleCountRows = db.query("SELECT COUNT(*) FROM modules")
+      let symbolCountRows = db.query("SELECT COUNT(*) FROM symbol")
+      let moduleCountRows = db.query("SELECT COUNT(*) FROM module")
       let typeStatsRows = db.query("""
         SELECT symbol_type, COUNT(*) as count 
-        FROM symbols 
+        FROM symbol 
         GROUP BY symbol_type 
         ORDER BY count DESC
       """)
@@ -326,3 +326,42 @@ proc getRegisteredDirectories*(db: Database): JsonNode =
   except Exception as e:
     echo "Database error getting registered directories: ", e.msg
     result = %*{"error": e.msg}
+
+proc getSymbolById*(db: Database, id: int): Option[Symbol] =
+  ## Get a symbol by its ID
+  try:
+    let symbol = db.pool.get(Symbol, id)
+    return some(symbol)
+  except Exception:
+    return none(Symbol)
+
+proc getModules*(db: Database): JsonNode =
+  ## Get all modules
+  result = newJArray()
+  try:
+    let modules = db.pool.filter(Module, "1=1 ORDER BY name")
+    
+    for module in modules:
+      let moduleObj = %*{
+        "name": module.name,
+        "file_path": module.filePath,
+        "last_modified": $module.lastModified,
+        "documentation": module.documentation,
+        "created_at": $module.created
+      }
+      result.add(moduleObj)
+      
+  except Exception as e:
+    echo "Database error getting modules: ", e.msg
+    result = %*{"error": e.msg}
+
+proc findModule*(db: Database, name: string): Option[Module] =
+  ## Find a module by name
+  try:
+    let modules = db.pool.filter(Module, it.name == name)
+    if modules.len > 0:
+      return some(modules[0])
+    else:
+      return none(Module)
+  except Exception:
+    return none(Module)

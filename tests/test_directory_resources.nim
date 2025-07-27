@@ -1,12 +1,12 @@
-## Tests for NimGenie directory resource functionality
-## Tests the three MCP tools: addDirectoryResource, listDirectoryResources, removeDirectoryResource
-## Also tests MIME type detection and file serving capabilities
+## Comprehensive tests for NimGenie directory resource functionality
+## Tests database operations, MCP tools, MIME type detection, and file serving capabilities
+## Consolidates all directory resource testing into a single comprehensive test suite
 
-import unittest, json, options, os, strutils, times, tables
+import unittest, json, os, strutils, times
 import ../src/database
 import test_utils
 
-suite "NimGenie Directory Resource Tests":
+suite "Database Directory Registration Tests":
   
   var testDb: Database
   var testTempDir: string
@@ -42,7 +42,7 @@ suite "NimGenie Directory Resource Tests":
     if dirExists(testTempDir):
       removeDir(testTempDir)
 
-  test "addDirectoryToResources - valid directory":
+  test "addRegisteredDirectory - new directory":
     requireTiDB:
       let result = testDb.addRegisteredDirectory(testDir1.normalizedPath().absolutePath(), "Test Screenshots", "Test PNG files")
       
@@ -56,7 +56,7 @@ suite "NimGenie Directory Resource Tests":
       check dirData[0]["name"].getStr() == "Test Screenshots"
       check dirData[0]["description"].getStr() == "Test PNG files"
 
-  test "addDirectoryToResources - nonexistent directory":
+  test "addRegisteredDirectory - nonexistent directory":
     requireTiDB:
       let fakeDir = testTempDir / "nonexistent"
       # Cannot add nonexistent directory - this test validates behavior at a higher level
@@ -70,7 +70,7 @@ suite "NimGenie Directory Resource Tests":
       let dirData = testDb.getRegisteredDirectories()
       check dirData.len == 1
 
-  test "addDirectoryToResources - duplicate directory":
+  test "addRegisteredDirectory - duplicate path (replace)":
     requireTiDB:
       let normalizedPath = testDir1.normalizedPath().absolutePath()
       
@@ -88,7 +88,7 @@ suite "NimGenie Directory Resource Tests":
       check dirData[0]["name"].getStr() == "Second"
       check dirData[0]["description"].getStr() == "Second description"
 
-  test "removeDirectoryFromResources - existing directory":
+  test "removeRegisteredDirectory - existing directory":
     requireTiDB:
       let normalizedPath = testDir1.normalizedPath().absolutePath()
       
@@ -105,7 +105,7 @@ suite "NimGenie Directory Resource Tests":
       let dirData = testDb.getRegisteredDirectories()
       check dirData.len == 0
 
-  test "removeDirectoryFromResources - nonexistent directory": 
+  test "removeRegisteredDirectory - nonexistent directory": 
     requireTiDB:
       let fakeDir = testTempDir / "nonexistent"
       let result = testDb.removeRegisteredDirectory(fakeDir.normalizedPath().absolutePath())
@@ -135,29 +135,124 @@ suite "NimGenie Directory Resource Tests":
       check normalizedPath1 in foundPaths
       check normalizedPath2 in foundPaths
 
-proc detectMimeType(filename: string): string =
-  ## Test implementation of MIME type detection
-  let ext = filename.splitFile().ext.toLowerAscii()
-  case ext
-  of ".png": "image/png"
-  of ".jpg", ".jpeg": "image/jpeg"
-  of ".gif": "image/gif"
-  of ".svg": "image/svg+xml"
-  of ".webp": "image/webp"
-  of ".txt": "text/plain"
-  of ".html": "text/html"
-  of ".css": "text/css"
-  of ".js": "application/javascript"
-  of ".json": "application/json"
-  of ".zip": "application/zip"
-  of ".tar": "application/x-tar"
-  of ".gz": "application/gzip"
-  else: "application/octet-stream"
+suite "MCP Tool Handlers Tests":
+  
+  # Mock MCP Tool Handlers for testing
+  proc testAddDirectoryToResources(db: Database, dirPath: string, name: string = "", description: string = ""): bool =
+    if not dirExists(dirPath):
+      return false
+    let normalizedPath = dirPath.normalizedPath().absolutePath()
+    return db.addRegisteredDirectory(normalizedPath, name, description)
 
-proc isImageFile(filename: string): bool =
-  ## Test implementation of image file detection
-  let mimeType = detectMimeType(filename)
-  mimeType.startsWith("image/")
+  proc testRemoveDirectoryFromResources(db: Database, dirPath: string): bool =
+    let normalizedPath = dirPath.normalizedPath().absolutePath()
+    return db.removeRegisteredDirectory(normalizedPath)
+
+  proc testListDirectoryResources(db: Database): string =
+    let dirData = db.getRegisteredDirectories()
+    return $dirData
+  
+  var testDb: Database
+  var testTempDir: string
+  var testDir1: string
+  var testDir2: string
+  
+  setup:
+    requireTiDB:
+      testDb = createTestDatabase()
+      testTempDir = getTempDir() / "nimgenie_mcp_test_" & $getTime().toUnix()
+      createDir(testTempDir)
+      testDir1 = testTempDir / "screenshots"
+      testDir2 = testTempDir / "documents"  
+      createDir(testDir1)
+      createDir(testDir2)
+      writeFile(testDir1 / "image1.png", "fake png data")
+      writeFile(testDir1 / "image2.png", "more fake png data")
+      writeFile(testDir2 / "readme.txt", "Documentation")
+    
+  teardown:
+    cleanupTestDatabase(testDb)
+    if dirExists(testTempDir):
+      removeDir(testTempDir)
+
+  test "addDirectoryResource tool handler":
+    requireTiDB:
+      let result1 = testAddDirectoryToResources(testDb, testDir1, "Screenshots", "PNG images")
+      check result1 == true
+      
+      let listResult = testListDirectoryResources(testDb)
+      let listJson = parseJson(listResult)
+      check listJson.len == 1
+      check listJson[0]["name"].getStr() == "Screenshots"
+      check listJson[0]["description"].getStr() == "PNG images"
+      check listJson[0]["path"].getStr() == testDir1.normalizedPath().absolutePath()
+
+  test "addDirectoryResource tool handler - invalid directory":
+    requireTiDB:
+      let fakeDir = testTempDir / "nonexistent"
+      let result = testAddDirectoryToResources(testDb, fakeDir, "Fake", "Does not exist")
+      check result == false
+      
+      let listResult = testListDirectoryResources(testDb)
+      let listJson = parseJson(listResult)
+      check listJson.len == 0
+
+  test "listDirectoryResources tool handler":
+    requireTiDB:
+      discard testAddDirectoryToResources(testDb, testDir1, "Dir1", "First directory")
+      discard testAddDirectoryToResources(testDb, testDir2, "Dir2", "Second directory")
+      
+      let result = testListDirectoryResources(testDb)
+      let resultJson = parseJson(result)
+      
+      check resultJson.kind == JArray
+      check resultJson.len == 2
+      
+      var foundNames: seq[string] = @[]
+      for entry in resultJson:
+        foundNames.add(entry["name"].getStr())
+      
+      check "Dir1" in foundNames
+      check "Dir2" in foundNames
+
+  test "removeDirectoryResource tool handler":
+    requireTiDB:
+      discard testAddDirectoryToResources(testDb, testDir1, "ToRemove", "Will be deleted")
+      
+      let listBefore = parseJson(testListDirectoryResources(testDb))
+      check listBefore.len == 1
+      
+      let result = testRemoveDirectoryFromResources(testDb, testDir1)
+      check result == true
+      
+      let listAfter = parseJson(testListDirectoryResources(testDb))
+      check listAfter.len == 0
+
+  test "Full workflow - add, list, remove":
+    requireTiDB:
+      let result1 = testAddDirectoryToResources(testDb, testDir1, "Images", "PNG files")
+      let result2 = testAddDirectoryToResources(testDb, testDir2, "Docs", "Text files")
+      check result1 == true
+      check result2 == true
+      
+      let listResult1 = parseJson(testListDirectoryResources(testDb))
+      check listResult1.len == 2
+      
+      let removeResult = testRemoveDirectoryFromResources(testDb, testDir1)
+      check removeResult == true
+      
+      let listResult2 = parseJson(testListDirectoryResources(testDb))
+      check listResult2.len == 1
+      check listResult2[0]["name"].getStr() == "Docs"
+      
+      let removeResult2 = testRemoveDirectoryFromResources(testDb, testDir2)
+      check removeResult2 == true
+      
+      let listResult3 = parseJson(testListDirectoryResources(testDb))
+      check listResult3.len == 0
+
+# MIME type detection and file utilities are now in test_utils
+
 
 suite "MIME Type Detection Tests":
   
@@ -191,19 +286,7 @@ suite "MIME Type Detection Tests":
     check isImageFile("readme.txt") == false
     check isImageFile("script.js") == false
 
-import base64
-
-proc encodeFileAsBase64(filePath: string): string =
-  ## Test implementation of base64 file encoding
-  let content = readFile(filePath)
-  encode(content)
-
-proc listDirectoryFiles(dirPath: string): seq[string] =
-  ## Test implementation of directory file listing
-  result = @[]
-  for entry in walkDirRec(dirPath):
-    let relativePath = entry.relativePath(dirPath)
-    result.add(relativePath)
+# File utilities are now in test_utils
 
 suite "File Serving Utilities Tests":
 

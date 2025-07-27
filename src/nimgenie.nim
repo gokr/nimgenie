@@ -1,5 +1,5 @@
 import nimcp
-import std/[json, tables, strutils, os, strformat, mimetypes, base64, options, locks, times]
+import std/[json, tables, strutils, os, strformat, mimetypes, base64, options, locks, times, parseopt]
 import database
 import indexer
 import analyzer
@@ -17,6 +17,17 @@ type
     nimblePackages*: Table[string, string]  # package name -> path
     symbolCache*: Table[string, JsonNode]
     registeredDirectories*: seq[string]
+    
+  Config* = object
+    port*: int
+    host*: string
+    projectPath*: string
+    verbose*: bool
+    showHelp*: bool
+    showVersion*: bool
+    databaseHost*: string
+    databasePort*: int
+    noDiscovery*: bool
 
 var genie: NimGenie
 var genieLock: Lock
@@ -300,6 +311,151 @@ Dependency indexing completed:
   except Exception as e:
     return fmt"Dependency indexing failed: {e.msg}"
 
+proc showVersion() =
+  ## Display version information and exit
+  echo "NimGenie v0.1.0"
+  echo "MCP server for Nim programming with intelligent code analysis and indexing"
+  echo "Copyright (c) 2024 Göran Krampe"
+  echo "Licensed under MIT License"
+  quit(0)
+
+proc showHelp() =
+  ## Display help information and exit
+  echo """
+NimGenie v0.1.0 - MCP Server for Nim Programming
+
+USAGE:
+    nimgenie [OPTIONS]
+
+DESCRIPTION:
+    NimGenie is a comprehensive MCP (Model Context Protocol) server for Nim programming
+    that provides intelligent code analysis, indexing, and development assistance.
+
+OPTIONS:
+    -h, --help              Show this help message and exit
+    -v, --version           Show version information and exit
+    -p, --port <number>     Port for the MCP server (default: 8080)
+        --host <address>    Host address to bind to (default: localhost)
+        --project <path>    Project directory to analyze (default: current directory)
+        --verbose           Enable verbose logging
+        --database-host <host>    TiDB database host (default: from TIDB_HOST env var or localhost)
+        --database-port <port>    TiDB database port (default: from TIDB_PORT env var or 4000)
+        --no-discovery      Disable automatic Nimble package discovery
+
+ENVIRONMENT VARIABLES:
+    TIDB_HOST              Database host (default: localhost)
+    TIDB_PORT              Database port (default: 4000)
+    TIDB_USER              Database user (default: root)
+    TIDB_PASSWORD          Database password (default: empty)
+    TIDB_DATABASE          Database name (default: nimgenie)
+    TIDB_POOL_SIZE         Connection pool size (default: 10)
+
+EXAMPLES:
+    nimgenie                            # Start server on default port 8080
+    nimgenie --port 9000               # Start server on port 9000
+    nimgenie --project /path/to/project # Analyze specific project directory
+    nimgenie --verbose --port 8080     # Start with verbose logging
+    nimgenie --help                    # Show this help message
+
+FEATURES:
+    • Intelligent symbol indexing and search across Nim projects
+    • Nimble package discovery and dependency analysis
+    • Real-time syntax checking and semantic analysis
+    • MCP resource serving for project files and screenshots
+    • Multi-project support with persistent database storage
+    • Integration with TiDB for scalable symbol storage
+
+For more information, visit: https://github.com/gokr/nimgenie
+"""
+  quit(0)
+
+proc defaultConfig(): Config =
+  ## Create default configuration with environment variable overrides
+  Config(
+    port: 8080,
+    host: "localhost",
+    projectPath: getCurrentDir(),
+    verbose: false,
+    showHelp: false,
+    showVersion: false,
+    databaseHost: getEnv("TIDB_HOST", "localhost"),
+    databasePort: parseInt(getEnv("TIDB_PORT", "4000")),
+    noDiscovery: false
+  )
+
+proc parseCommandLine(): Config =
+  ## Parse command line arguments using parseopt
+  result = defaultConfig()
+  
+  for kind, key, val in getopt():
+    case kind
+    of cmdArgument:
+      # Handle positional arguments if needed in the future
+      discard
+    of cmdLongOption, cmdShortOption:
+      case key
+      of "help", "h":
+        result.showHelp = true
+      of "version", "v":
+        result.showVersion = true
+      of "port", "p":
+        if val.len == 0:
+          echo "Error: --port requires a value"
+          quit(1)
+        try:
+          result.port = parseInt(val)
+          if result.port < 1 or result.port > 65535:
+            echo "Error: Port must be between 1 and 65535"
+            quit(1)
+        except ValueError:
+          echo fmt"Error: Invalid port number: {val}"
+          quit(1)
+      of "host":
+        if val.len == 0:
+          echo "Error: --host requires a value"
+          quit(1)
+        result.host = val
+      of "project":
+        if val.len == 0:
+          echo "Error: --project requires a value"
+          quit(1)
+        result.projectPath = val.expandTilde().absolutePath()
+        if not dirExists(result.projectPath):
+          echo fmt"Error: Project directory does not exist: {result.projectPath}"
+          quit(1)
+      of "verbose":
+        result.verbose = true
+      of "database-host":
+        if val.len == 0:
+          echo "Error: --database-host requires a value"
+          quit(1)
+        result.databaseHost = val
+      of "database-port":
+        if val.len == 0:
+          echo "Error: --database-port requires a value"
+          quit(1)
+        try:
+          result.databasePort = parseInt(val)
+          if result.databasePort < 1 or result.databasePort > 65535:
+            echo "Error: Database port must be between 1 and 65535"
+            quit(1)
+        except ValueError:
+          echo fmt"Error: Invalid database port number: {val}"
+          quit(1)
+      of "no-discovery":
+        result.noDiscovery = true
+      else:
+        echo fmt"Error: Unknown option: --{key}"
+        echo "Use --help for usage information"
+        quit(1)
+    of cmdEnd:
+      break
+  
+  # Handle help and version flags
+  if result.showHelp:
+    showHelp()
+  if result.showVersion:
+    showVersion()
 
 let server = mcpServer("nimgenie", "0.1.0"):
 
@@ -908,8 +1064,35 @@ when isMainModule:
   # Initialize the lock
   initLock(genieLock)
   
-  # Open local instance of NimGenie for current directory
-  genie = openGenie(getCurrentDir())
-  # Start server on port 8080
-  let transport = newMummyTransport(8080, "localhost")
+  # Parse command line arguments
+  let config = parseCommandLine()
+  
+  # Set database environment variables if provided via command line
+  if config.databaseHost != getEnv("TIDB_HOST", "localhost"):
+    putEnv("TIDB_HOST", config.databaseHost)
+  if config.databasePort != parseInt(getEnv("TIDB_PORT", "4000")):
+    putEnv("TIDB_PORT", $config.databasePort)
+  
+  # Open local instance of NimGenie for specified directory
+  genie = openGenie(config.projectPath)
+  
+  # Apply no-discovery option
+  if config.noDiscovery:
+    echo "Skipping Nimble package discovery (--no-discovery specified)"
+    genie.nimblePackages.clear()
+  
+  if config.verbose:
+    echo fmt"Configuration:"
+    echo fmt"  Port: {config.port}"
+    echo fmt"  Host: {config.host}"
+    echo fmt"  Project: {config.projectPath}"
+    echo fmt"  Database Host: {config.databaseHost}"
+    echo fmt"  Database Port: {config.databasePort}"
+    echo fmt"  No Discovery: {config.noDiscovery}"
+    echo fmt"  Discovered {genie.nimblePackages.len} Nimble packages"
+  
+  echo fmt"Starting NimGenie MCP server on {config.host}:{config.port} for project: {config.projectPath}"
+  
+  # Start server on specified port and host
+  let transport = newMummyTransport(config.port, config.host)
   transport.serve(server)

@@ -143,7 +143,7 @@ type
 proc newDatabase*(): Database =
   ## Initialize database with connection pool
   let host = getEnv("TIDB_HOST", "localhost")
-  let port = parseInt(getEnv("TIDB_PORT", "3306"))
+  let port = parseInt(getEnv("TIDB_PORT", "4000"))
   let user = getEnv("TIDB_USER", "root")
   let password = getEnv("TIDB_PASSWORD", "")
   let database = getEnv("TIDB_DATABASE", "nimgenie")
@@ -217,7 +217,7 @@ proc clearSymbols*(db: Database, moduleName: string = "") =
 
 #### Configuration Environment Variables:
 - `TIDB_HOST` - Database host (default: localhost)
-- `TIDB_PORT` - Database port (default: 3306)  
+- `TIDB_PORT` - Database port (default: 4000)  
 - `TIDB_USER` - Database user (default: root)
 - `TIDB_PASSWORD` - Database password (default: empty)
 - `TIDB_DATABASE` - Database name (default: nimgenie)
