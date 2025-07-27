@@ -1,7 +1,7 @@
 ## Tests for NimGenie multi-project management architecture
 ## Tests the data structures and foundations for multi-project support
 
-import unittest, json, os, strutils, times, tables
+import unittest, json, os, times, tables
 import ../src/nimgenie, ../src/database
 import test_utils, test_server
 

@@ -2,7 +2,7 @@
 ## Tests screenshot creation, directory management, and file serving capabilities
 ## Consolidates all screenshot-related testing into a single comprehensive test suite
 
-import unittest, json, os, strutils, times, tables, base64, random, strformat, httpclient
+import unittest, json, os, strutils, times, random, strformat, httpclient
 import ../src/database
 import test_utils
 

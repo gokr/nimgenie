@@ -1,8 +1,9 @@
 ## Test utilities for NimGenie tests
 ## Provides common setup for TiDB connections and test databases
 
-import os, strutils, strformat, times
+import os, strutils, strformat
 import ../src/database
+import ../src/configuration
 import debby/pools, debby/mysql
 
 const
@@ -18,10 +19,28 @@ proc cleanTestTables*(db: Database) =
     db.pool.withDb:
       # Delete all data from tables in reverse dependency order
       discard db.query("DELETE FROM symbol")
-      discard db.query("DELETE FROM module") 
+      discard db.query("DELETE FROM module")
       discard db.query("DELETE FROM registered_directory")
   except Exception as e:
     echo "Warning: Could not clean test tables: ", e.msg
+
+proc getTestConfig(dbName: string): Config =
+  ## Create a configuration for test database
+  result = Config(
+    port: 0,
+    host: "localhost",
+    projectPath: "",
+    verbose: false,
+    showHelp: false,
+    showVersion: false,
+    database: dbName,
+    databaseHost: TEST_DB_HOST,
+    databasePort: TEST_DB_PORT,
+    databaseUser: TEST_DB_USER,
+    databasePassword: TEST_DB_PASSWORD,
+    databasePoolSize: 5,
+    noDiscovery: true
+  )
 
 proc createTestDatabase*(): Database =
   ## Create a test database instance connected to TiDB
@@ -30,24 +49,16 @@ proc createTestDatabase*(): Database =
   
   let testDbName = "nimgenie_test"
   
-  # Set environment variables for test database
-  putEnv("TIDB_HOST", TEST_DB_HOST)
-  putEnv("TIDB_PORT", $TEST_DB_PORT)
-  putEnv("TIDB_USER", TEST_DB_USER)
-  putEnv("TIDB_PASSWORD", TEST_DB_PASSWORD)
-  putEnv("TIDB_DATABASE", testDbName)
-  putEnv("TIDB_POOL_SIZE", "5")  # Smaller pool for tests
-  
   # Create the database first by connecting to default database
-  putEnv("TIDB_DATABASE", "test")
-  let setupDb = newDatabase()
+  let setupConfig = getTestConfig("test")
+  let setupDb = newDatabase(setupConfig)
   setupDb.pool.withDb:
     discard db.query(fmt"CREATE DATABASE IF NOT EXISTS {testDbName}")
-  setupDb.closeDatabase()
+  closeDatabase(setupDb)
   
   # Now connect to our test database
-  putEnv("TIDB_DATABASE", testDbName)
-  result = newDatabase()
+  let testConfig = getTestConfig(testDbName)
+  result = newDatabase(testConfig)
   
   # Clean all tables to ensure fresh state
   cleanTestTables(result)
@@ -55,20 +66,16 @@ proc createTestDatabase*(): Database =
 proc cleanupTestDatabase*(db: Database) =
   ## Clean up test database - just close connections since we reuse the database
   # Close the test database connection
-  db.closeDatabase()
+  closeDatabase(db)
 
 proc checkTiDBAvailable*(): bool =
   ## Check if TiDB is available for testing
   try:
-    putEnv("TIDB_HOST", TEST_DB_HOST)
-    putEnv("TIDB_PORT", $TEST_DB_PORT)
-    putEnv("TIDB_USER", TEST_DB_USER)
-    putEnv("TIDB_PASSWORD", TEST_DB_PASSWORD)
-    putEnv("TIDB_DATABASE", "test")
-    let testDb = newDatabase()
+    let testConfig = getTestConfig("test")
+    let testDb = newDatabase(testConfig)
     testDb.pool.withDb:
       discard db.query("SELECT 1")
-    testDb.closeDatabase()
+    closeDatabase(testDb)
     return true
   except Exception as e:
     echo fmt"Check for Tidb failed: {e.msg}"

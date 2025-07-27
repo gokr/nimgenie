@@ -1,7 +1,7 @@
 ## Simple test to verify startTestServer functionality works
 
 import unittest, os, strformat
-import test_server, test_utils, mcp_client
+import test_server, mcp_client
 
 suite "Test Server Functionality":
 

@@ -29,7 +29,19 @@
       "Bash(./nimgenie --help)",
       "Bash(./tests/test_directory_resources)",
       "Bash(./test_directory_resources)",
-      "Bash(mysql:*)"
+      "Bash(mysql:*)",
+      "Bash(timeout:*)",
+      "Bash(rm:*)",
+      "Bash(./tests/test_screenshot_workflow)",
+      "Bash(tiup playground:*)",
+      "Bash(./tests/test_multi_project)",
+      "Bash(/dev/null)",
+      "Bash(timeout:*)",
+      "Bash(./tests/test_server_simple)",
+      "Bash(./nimgenie:*)",
+      "Bash(pkill:*)",
+      "Bash(./tests/test_database_operations:*)",
+      "Bash(./nimgenie:*)"
     ],
     "deny": []
   }

@@ -1,9 +1,9 @@
 ## Tests for NimGenie analyzer functionality
 ## Tests Nim compiler integration, syntax checking, and code analysis
 
-import unittest, json, os, strutils, times, osproc, strformat
+import unittest, json, os, times, strformat
 import ../src/analyzer
-import test_utils, test_server
+import test_server
 
 suite "Analyzer Initialization Tests":
 

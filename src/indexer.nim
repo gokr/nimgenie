@@ -152,7 +152,8 @@ proc indexSingleFile*(indexer: Indexer, filePath: string): tuple[success: bool, 
     echo fmt"Indexing file: {filePath}"
     
     # Generate JSON documentation for the file
-    let cmdResult = indexer.analyzer.execNimCommand("jsondoc", @[filePath])
+    let absolutePath = if isAbsolute(filePath): filePath else: indexer.projectPath / filePath
+    let cmdResult = indexer.analyzer.execNimCommand("jsondoc", @[absolutePath])
     
     if cmdResult.exitCode != 0:
       echo fmt"Failed to generate jsondoc for {filePath}: {cmdResult.output}"
@@ -205,7 +206,7 @@ proc indexProject*(indexer: Indexer): string =
     
     # Try project-wide indexing as well
     echo "Attempting project-wide indexing..."
-    let projectResult = indexer.analyzer.execNimCommand("doc", @["--index:on", "--project", indexer.projectPath])
+    let projectResult = indexer.analyzer.execNimCommand("doc", @["--index:on", "--project", indexer.projectPath.absolutePath])
     
     if projectResult.exitCode == 0:
       echo "✓ Project-wide indexing completed"

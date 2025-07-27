@@ -1,5 +1,6 @@
-import std/[json, strutils, strformat, os, options, times]
+import std/[json, strutils, strformat, os, osproc, options, times]
 import debby/pools, debby/mysql, debby/common
+import configuration
 
 type
   Symbol* = ref object
@@ -33,18 +34,18 @@ type
   Database* = object
     pool*: Pool
 
-proc newDatabase*(): Database =
+proc ensureDatabaseExists(config: Config) =
+  ## Create the database first using mysql command
+  let createDbResult = execCmd(fmt"mysql -h{config.databaseHost} -P{config.databasePort} -u{config.databaseUser} -e 'CREATE DATABASE IF NOT EXISTS `{config.database}`;' --silent")
+  if createDbResult != 0:
+    echo fmt"Warning: Could not create database {config.database}."
+
+proc newDatabase*(config: Config): Database =
   ## Create a new database instance with connection pool
-  let host = getEnv("TIDB_HOST", "localhost")
-  let port = parseInt(getEnv("TIDB_PORT", "4000"))
-  let user = getEnv("TIDB_USER", "root")
-  let password = getEnv("TIDB_PASSWORD", "")
-  let database = getEnv("TIDB_DATABASE", "nimgenie")
-  let poolSize = parseInt(getEnv("TIDB_POOL_SIZE", "10"))
-  
+  ensureDatabaseExists(config)
   result.pool = newPool()
-  for i in 0 ..< poolSize:
-    result.pool.add openDatabase(database, host, port, user, password)
+  for i in 0 ..< config.databasePoolSize:
+    result.pool.add openDatabase(config.database, config.databaseHost, config.databasePort, config.databaseUser, config.databasePassword)
   # Create tables first, then indexes (following tankfeudserver patterns)
   result.pool.withDb:    
     # Create tables first
@@ -134,7 +135,7 @@ proc insertModule*(db: Database, name, filePath: string, lastModified: string = 
     return -1
 
 proc searchSymbols*(db: Database, query: string, symbolType: string = "", 
-                   moduleName: string = ""): JsonNode =
+                   moduleName: string = "", limit: int = 100): JsonNode =
   ## Search for symbols matching the query
   result = newJArray()
   
@@ -144,7 +145,7 @@ proc searchSymbols*(db: Database, query: string, symbolType: string = "",
       var sqlQuery = "SELECT * FROM symbol WHERE 1=1"
       
       if query != "":
-        sqlQuery.add(fmt" AND name LIKE '%{query}%'")
+        sqlQuery.add(fmt" AND LOWER(name) LIKE LOWER('%{query}%')")
       
       if symbolType != "":
         sqlQuery.add(fmt" AND symbol_type = '{symbolType}'")
@@ -152,7 +153,7 @@ proc searchSymbols*(db: Database, query: string, symbolType: string = "",
       if moduleName != "":
         sqlQuery.add(fmt" AND module = '{moduleName}'")
       
-      sqlQuery.add(" ORDER BY name LIMIT 100")
+      sqlQuery.add(fmt" ORDER BY name LIMIT {limit}")
       
       let rows = db.query(sqlQuery)
       

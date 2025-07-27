@@ -1,9 +1,6 @@
 import nimcp
 import std/[json, tables, strutils, os, strformat, mimetypes, base64, options, locks, times, parseopt]
-import database
-import indexer
-import analyzer
-import nimble
+import configuration, database, indexer, analyzer, nimble
 
 type
   NimProject* = object
@@ -17,17 +14,6 @@ type
     nimblePackages*: Table[string, string]  # package name -> path
     symbolCache*: Table[string, JsonNode]
     registeredDirectories*: seq[string]
-    
-  Config* = object
-    port*: int
-    host*: string
-    projectPath*: string
-    verbose*: bool
-    showHelp*: bool
-    showVersion*: bool
-    databaseHost*: string
-    databasePort*: int
-    noDiscovery*: bool
 
 var genie: NimGenie
 var genieLock: Lock
@@ -97,9 +83,9 @@ proc discoverNimblePackages*(genie: var NimGenie) =
   except Exception as e:
     echo fmt"Error discovering Nimble packages: {e.msg}"
 
-proc openGenie*(path: string): NimGenie =
+proc openGenie*(config: Config): NimGenie =
   ## Open or create local instance of NimGenie
-  result.database = newDatabase()
+  result.database = newDatabase(config)
   result.projects = initTable[string, NimProject]()
   result.nimblePackages = initTable[string, string]()
   result.symbolCache = initTable[string, JsonNode]()
@@ -378,8 +364,12 @@ proc defaultConfig(): Config =
     verbose: false,
     showHelp: false,
     showVersion: false,
+    database: getEnv("TIDB_DATABASE", "nimgenie"),
     databaseHost: getEnv("TIDB_HOST", "localhost"),
     databasePort: parseInt(getEnv("TIDB_PORT", "4000")),
+    databaseUser: getEnv("TIDB_USER", "root"),
+    databasePassword: getEnv("TIDB_PASSWORD", ""),
+    databasePoolSize: parseInt(getEnv("TIDB_POOL_SIZE", "10")),
     noDiscovery: false
   )
 
@@ -555,7 +545,7 @@ Use searchSymbols to search across all indexed code.
           if genie.symbolCache.hasKey(cacheKey):
             return $genie.symbolCache[cacheKey]
           
-          let results = genie.database.searchSymbols(query, symbolType, moduleName)
+          let results = genie.database.searchSymbols(query, symbolType, moduleName, limit = 1000)
           genie.symbolCache[cacheKey] = results
           
           return $results
@@ -1187,16 +1177,20 @@ when isMainModule:
   initLock(genieLock)
   
   # Parse command line arguments
-  let config = parseCommandLine()
+  var config = parseCommandLine()
   
+  # Hack
+  if config.databaseHost == "localhost":
+    config.databaseHost = "127.0.0.1"
+
   # Set database environment variables if provided via command line
   if config.databaseHost != getEnv("TIDB_HOST", "localhost"):
     putEnv("TIDB_HOST", config.databaseHost)
   if config.databasePort != parseInt(getEnv("TIDB_PORT", "4000")):
     putEnv("TIDB_PORT", $config.databasePort)
   
-  # Open local instance of NimGenie for specified directory
-  genie = openGenie(config.projectPath)
+  # Open local instance of NimGenie
+  genie = openGenie(config)
   
   # Apply no-discovery option
   if config.noDiscovery:

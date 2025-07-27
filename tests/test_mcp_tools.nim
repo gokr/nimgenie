@@ -1,7 +1,7 @@
 ## Test the actual MCP tools for directory resources
 ## This creates a mock MCP request context and tests the tool handlers
 
-import unittest, json, options, os, strutils, times
+import unittest, json, os, times
 import ../src/database
 import test_utils
 
