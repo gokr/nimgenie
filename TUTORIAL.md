@@ -84,21 +84,22 @@ nimble build
 # Install TiUP (if not already installed)
 curl --proto '=https' --tlsv1.2 -sSf https://tiup-mirrors.pingcap.com/install.sh | sh
 
-# Start TiDB playground
-tiup playground
+# Start TiDB playground that is persistent via the tag nimgenie
+tiup playground --tag nimgenie
 ```
 
 #### 3. Configure Your AI Assistant
 
-**For Claude Code:**
+**For Roocode:**
 Add to your MCP settings:
 
 ```json
 {
-  "servers": {
+  "mcpServers": {
     "nimgenie": {
-      "command": "/path/to/nimgenie/nimgenie",
-      "args": ["--port", "8080"]
+      "type": "streamable-http",
+      "url": "http://localhost:8080",
+      "disabled": false
     }
   }
 }
