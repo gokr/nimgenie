@@ -465,6 +465,55 @@ This architecture provides the foundation for a powerful, scalable MCP tool that
 - **JSON Object Construction**: Prefer the `%*{}` syntax for clean, readable JSON creation
 - **Content Serialization**: Use dedicated procs or templates for consistent formatting
 
+## MCP Tool Documentation Standards
+
+When creating or updating MCP tools using the `mcpTool` macro, follow these documentation patterns for consistency and AI assistant usability:
+
+### Documentation Pattern
+```nim
+mcpTool:
+  proc toolName(param1: Type1, param2: Type2 = "default"): string {.gcsafe.} =
+    ## Main tool description that explains what the tool does, when to use it,
+    ## and what problem it solves. Should be comprehensive but concise, targeting
+    ## AI assistants that need to understand the tool's purpose and context.
+    ## - param1: Description of first parameter including its purpose and expected format
+    ## - param2: Description of second parameter with default value explanation
+```
+
+### Documentation Requirements
+
+#### Main Description (`##`)
+- **Purpose**: Clearly explain what the tool does and what it accomplishes
+- **When to use**: Describe scenarios where this tool should be used
+- **Context**: Explain how it fits into typical workflows
+- **AI-friendly**: Write for AI assistants who need to understand when and how to use the tool
+- **Length**: 2-4 sentences providing comprehensive but concise information
+
+#### Parameter Documentation (`## - paramName:`)
+- **Format**: Use `## - paramName: Description` format for each parameter
+- **Required vs Optional**: Clearly indicate optional parameters and their defaults
+- **Expected Values**: Describe what values are valid or expected
+- **Examples**: Include format examples when helpful (e.g., version constraints, file paths)
+
+#### Section Organization
+- **Group related tools**: Use clear section headers with `# ============` borders  
+- **Logical ordering**: Place core functionality first, followed by specialized tools
+- **Consistent naming**: Use descriptive section names that explain the tool category
+
+### Example Sections
+```nim
+# ============================================================================
+# CORE PROJECT ANALYSIS TOOLS
+# Tools for indexing, searching, and analyzing Nim projects and their code
+# ============================================================================
+```
+
+This documentation pattern ensures that AI assistants can easily understand:
+1. What each tool does and why it exists
+2. When to use each tool in typical workflows  
+3. What parameters are required and what values are expected
+4. How tools relate to each other within functional groups
+
 ## Development Best Practices
 - Always end todolists by running all the tests at the end to verify everything compiles and works
 
@@ -473,6 +522,3 @@ This architecture provides the foundation for a powerful, scalable MCP tool that
 - When implementing new architecture patterns, completely remove the old implementation patterns
 - Delete deprecated methods, unused types, and obsolete code paths immediately
 - Keep the codebase lean and focused on the current architectural approach
-
-## Development Best Practices
-- Always end todolists by running all the tests at the end to verify everything compiles and works

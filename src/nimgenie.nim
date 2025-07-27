@@ -459,9 +459,17 @@ proc parseCommandLine(): Config =
 
 let server = mcpServer("nimgenie", "0.1.0"):
 
+  # ============================================================================
+  # CORE PROJECT ANALYSIS TOOLS
+  # Tools for indexing, searching, and analyzing Nim projects and their code
+  # ============================================================================
+
   mcpTool:
     proc indexCurrentProject(): string {.gcsafe.} =
-      ## Index the current project and all its dependencies
+      ## Index the current working directory as a Nim project, including all source files and dependencies.
+      ## This performs a comprehensive analysis of both the main project and all its Nimble dependencies,
+      ## creating a searchable database of symbols, functions, types, and modules. Use this as the first
+      ## step when working with a new Nim project to enable intelligent code search and analysis.
       try:
         withGenie:
           # Get or create current project
@@ -506,7 +514,10 @@ Use searchSymbols to search across all indexed code.
         
   mcpTool:
     proc indexProjectDependenciesOnly(): string {.gcsafe.} =
-      ## Index only the project dependencies (without re-indexing the main project)
+      ## Index only the Nimble dependencies of the current project, leaving the main project symbols unchanged.
+      ## This is useful when you want to refresh dependency information without re-processing the main project
+      ## source files. Use this when dependencies have been updated or when you need dependency symbols
+      ## but the main project is already indexed.
       try:
         withGenie:
           let currentPath = getCurrentDir()
@@ -531,7 +542,12 @@ Use searchSymbols to search across all indexed code.
         
   mcpTool:
     proc searchSymbols(query: string, symbolType: string = "", moduleName: string = ""): string {.gcsafe.} =
-      ## Search for symbols by name, optionally filtered by type and module
+      ## Search for symbols (functions, types, variables, constants) across all indexed Nim code.
+      ## Returns detailed information including location, signature, documentation, and module context.
+      ## Use this to find specific symbols, explore APIs, or understand code structure across projects.
+      ## - query: Symbol name or partial name to search for (supports partial matching)
+      ## - symbolType: Optional filter by symbol type (e.g., "proc", "type", "var", "const", "template", "macro")
+      ## - moduleName: Optional filter to search only within a specific module or package
       try:
         withGenie:
           # Check cache first
@@ -548,7 +564,11 @@ Use searchSymbols to search across all indexed code.
         
   mcpTool:
     proc getSymbolInfo(symbolName: string, moduleName: string = ""): string {.gcsafe.} =
-      ## Get detailed information about a specific symbol
+      ## Get comprehensive information about a specific symbol including its definition, documentation,
+      ## source location, and usage context. Use this to understand what a symbol does, where it's defined,
+      ## and how to use it properly in your code.
+      ## - symbolName: Exact name of the symbol to look up
+      ## - moduleName: Optional module name to disambiguate symbols with the same name in different modules
       try:
         withGenie:
           let cacheKey = fmt"info:{symbolName}:{moduleName}"
@@ -564,7 +584,10 @@ Use searchSymbols to search across all indexed code.
         
   mcpTool:
     proc checkSyntax(filePath: string = ""): string {.gcsafe.} =
-      ## Check syntax and semantics of Nim code
+      ## Validate Nim code syntax and semantics using the Nim compiler's built-in checking capabilities.
+      ## Reports compilation errors, warnings, and semantic issues. Use this to verify code correctness
+      ## before committing changes or to diagnose compilation problems.
+      ## - filePath: Optional path to specific file to check (defaults to checking entire current project)
       try:
         withGenie:
           let currentPath = getCurrentDir()
@@ -584,7 +607,9 @@ Use searchSymbols to search across all indexed code.
         
   mcpTool:
     proc getProjectStats(): string {.gcsafe.} =
-      ## Get statistics about the indexed project
+      ## Get comprehensive statistics about the indexed project including symbol counts by type,
+      ## module information, file counts, and indexing status. Use this to understand the scope
+      ## and structure of the analyzed codebase and verify that indexing completed successfully.
       try:
         withGenie:
           let stats = genie.database.getProjectStats()
@@ -592,9 +617,19 @@ Use searchSymbols to search across all indexed code.
       except Exception as e:
         return fmt"Failed to get project stats: {e.msg}"
 
+  # ============================================================================
+  # DIRECTORY RESOURCE MANAGEMENT
+  # Tools for managing directories that can be served as MCP resources to clients
+  # ============================================================================
+
   mcpTool:
     proc addDirectoryResource(directoryPath: string, name: string = "", description: string = ""): string {.gcsafe.} =
-      ## Add a directory to be served as MCP resources
+      ## Register a directory to be served as MCP resources, making its files accessible to MCP clients.
+      ## This allows AI assistants to read project files, documentation, assets, and other resources.
+      ## Use this to expose specific directories (like docs, assets, or output folders) to MCP clients.
+      ## - directoryPath: Absolute or relative path to the directory to serve
+      ## - name: Optional human-readable name for the directory resource
+      ## - description: Optional description explaining what the directory contains
       try:
         withGenie:
           let normalizedPath = directoryPath.normalizedPath().absolutePath()
@@ -610,7 +645,9 @@ Use searchSymbols to search across all indexed code.
         
   mcpTool:
     proc listDirectoryResources(): string {.gcsafe.} =
-      ## List all registered directory resources
+      ## List all directories currently registered as MCP resources, showing their paths, names,
+      ## and descriptions. Use this to see what directories are available to MCP clients and
+      ## verify that resources have been registered correctly.
       try:
         withGenie:
           let dirData = genie.database.getRegisteredDirectories()
@@ -620,7 +657,10 @@ Use searchSymbols to search across all indexed code.
         
   mcpTool:
     proc removeDirectoryResource(directoryPath: string): string {.gcsafe.} =
-      ## Remove a directory from being served as MCP resources
+      ## Unregister a directory from being served as MCP resources, making its files no longer
+      ## accessible to MCP clients. Use this to clean up resource registrations or remove
+      ## directories that should no longer be exposed.
+      ## - directoryPath: Path to the directory to stop serving (must match the originally registered path)
       try:
         withGenie:
           let normalizedPath = directoryPath.normalizedPath().absolutePath()
@@ -631,9 +671,16 @@ Use searchSymbols to search across all indexed code.
       except Exception as e:
         return fmt"Error removing directory resource: {e.msg}"
 
+  # ============================================================================
+  # NIMBLE PACKAGE DISCOVERY & INDEXING
+  # Tools for working with locally installed Nimble packages and their symbols
+  # ============================================================================
+
   mcpTool:
     proc listNimblePackages(): string {.gcsafe.} =
-      ## List all discovered Nimble packages
+      ## List all Nimble packages discovered in the local system's package directories.
+      ## Shows package names and their installation paths. Use this to see what packages
+      ## are available for indexing and to verify that package discovery is working correctly.
       try:
         withGenie:
           var packagesList = newJArray()
@@ -651,7 +698,10 @@ Use searchSymbols to search across all indexed code.
 
   mcpTool:
     proc indexNimblePackage(packageName: string): string {.gcsafe.} =
-      ## Index a specific Nimble package
+      ## Index a specific Nimble package, analyzing its source code and adding its symbols
+      ## to the searchable database. Use this to make a package's APIs and implementation
+      ## available for search and analysis. Required before you can search for symbols in a package.
+      ## - packageName: Name of the Nimble package to index (must be from the discovered packages list)
       try:
         withGenie:
           if packageName notin genie.nimblePackages:
@@ -677,10 +727,18 @@ Use searchSymbols to search across all indexed code.
       except Exception as e:
         return fmt"Failed to index Nimble package '{packageName}': {e.msg}"
 
-  # Package Management Tools
+  # ============================================================================
+  # PACKAGE MANAGEMENT TOOLS
+  # Tools for installing, uninstalling, and managing Nimble packages
+  # ============================================================================
+
   mcpTool:
     proc nimbleInstallPackage(packageName: string, version: string = ""): string {.gcsafe.} =
-      ## Install a Nimble package with optional version constraint
+      ## Install a Nimble package from the official registry with optional version constraints.
+      ## Downloads and installs the package and its dependencies. Use this to add new functionality
+      ## to your project or to install missing dependencies.
+      ## - packageName: Name of the package to install from the Nimble registry
+      ## - version: Optional version constraint (e.g., ">= 1.0.0", "~= 2.1", "== 1.5.0")
       try:
         withGenie:
           let currentPath = getCurrentDir()
@@ -691,7 +749,10 @@ Use searchSymbols to search across all indexed code.
 
   mcpTool:
     proc nimbleUninstallPackage(packageName: string): string {.gcsafe.} =
-      ## Uninstall a Nimble package
+      ## Remove a previously installed Nimble package from the system. This will uninstall
+      ## the package and may affect projects that depend on it. Use this to clean up unused
+      ## packages or resolve dependency conflicts.
+      ## - packageName: Name of the installed package to remove
       try:
         withGenie:
           let currentPath = getCurrentDir()
@@ -702,7 +763,10 @@ Use searchSymbols to search across all indexed code.
 
   mcpTool:
     proc nimbleSearchPackages(query: string): string {.gcsafe.} =
-      ## Search for packages in the Nimble registry
+      ## Search the official Nimble package registry for packages matching a query.
+      ## Returns package names, descriptions, and metadata. Use this to discover packages
+      ## that provide functionality you need or to explore the Nim ecosystem.
+      ## - query: Search terms to find packages (searches names, descriptions, and tags)
       try:
         withGenie:
           let currentPath = getCurrentDir()
@@ -713,7 +777,10 @@ Use searchSymbols to search across all indexed code.
 
   mcpTool:
     proc nimbleListPackages(installed: bool = false): string {.gcsafe.} =
-      ## List Nimble packages (installed vs available)
+      ## List Nimble packages, either installed locally or available in the registry.
+      ## Use this to see what packages are available for installation or to check
+      ## what's currently installed on your system.
+      ## - installed: If true, show only locally installed packages; if false, show available packages from registry
       try:
         withGenie:
           let currentPath = getCurrentDir()
@@ -724,7 +791,9 @@ Use searchSymbols to search across all indexed code.
 
   mcpTool:
     proc nimbleRefreshPackages(): string {.gcsafe.} =
-      ## Refresh package list from registry
+      ## Update the local cache of available packages from the Nimble registry.
+      ## Run this periodically to ensure you have the latest package information
+      ## and can discover newly published packages. Use before searching or installing packages.
       try:
         withGenie:
           let currentPath = getCurrentDir()
@@ -733,10 +802,18 @@ Use searchSymbols to search across all indexed code.
       except Exception as e:
         return fmt"Failed to refresh packages: {e.msg}"
 
-  # Project Development Tools
+  # ============================================================================
+  # PROJECT DEVELOPMENT TOOLS
+  # Tools for creating, building, testing, and running Nim projects
+  # ============================================================================
+
   mcpTool:
     proc nimbleInitProject(projectName: string, packageType: string = "lib"): string {.gcsafe.} =
-      ## Initialize a new Nimble project
+      ## Create a new Nimble project with the standard directory structure and configuration files.
+      ## Automatically generates .nimble file, source directories, and initial code templates.
+      ## The new project is automatically indexed after creation.
+      ## - projectName: Name for the new project (will be used for directory and package name)
+      ## - packageType: Type of project to create ("lib" for library, "bin" for executable, "hybrid" for both)
       try:
         withGenie:
           let currentPath = getCurrentDir()
@@ -755,7 +832,11 @@ Use searchSymbols to search across all indexed code.
 
   mcpTool:
     proc nimbleBuildProject(target: string = "", mode: string = ""): string {.gcsafe.} =
-      ## Build the current Nimble project
+      ## Compile the current Nimble project, creating executable binaries or library files.
+      ## Reports compilation errors and warnings. Use this to verify that your code compiles
+      ## correctly and to generate distributable binaries.
+      ## - target: Optional specific target to build (defaults to all targets defined in .nimble file)
+      ## - mode: Optional compilation mode ("debug", "release", or custom mode from .nimble config)
       try:
         withGenie:
           let currentPath = getCurrentDir()
@@ -766,7 +847,10 @@ Use searchSymbols to search across all indexed code.
 
   mcpTool:
     proc nimbleTestProject(testFilter: string = ""): string {.gcsafe.} =
-      ## Run tests for the current Nimble project
+      ## Execute the test suite for the current project, running all test files and reporting results.
+      ## Shows passed/failed tests, coverage information, and detailed error messages for failures.
+      ## Use this to verify code correctness and maintain code quality.
+      ## - testFilter: Optional filter to run only specific tests or test files matching the pattern
       try:
         withGenie:
           let currentPath = getCurrentDir()
@@ -777,7 +861,11 @@ Use searchSymbols to search across all indexed code.
 
   mcpTool:
     proc nimbleRunProject(target: string, args: string = ""): string {.gcsafe.} =
-      ## Execute a Nimble project binary
+      ## Execute a compiled binary from the current project with optional command-line arguments.
+      ## Builds the target if necessary before running. Use this to test executable behavior
+      ## and functionality during development.
+      ## - target: Name of the executable target to run (as defined in .nimble file)
+      ## - args: Optional command-line arguments to pass to the executable (space-separated)
       try:
         withGenie:
           let currentPath = getCurrentDir()
@@ -789,7 +877,10 @@ Use searchSymbols to search across all indexed code.
 
   mcpTool:
     proc nimbleCheckProject(file: string = ""): string {.gcsafe.} =
-      ## Validate Nimble project configuration
+      ## Validate the Nimble project configuration, checking .nimble file syntax, dependencies,
+      ## and project structure. Reports configuration errors and suggests fixes. Use this to
+      ## troubleshoot project setup issues and ensure valid configuration.
+      ## - file: Optional path to specific .nimble file to check (defaults to current project's .nimble file)
       try:
         withGenie:
           let currentPath = getCurrentDir()
@@ -798,10 +889,18 @@ Use searchSymbols to search across all indexed code.
       except Exception as e:
         return fmt"Failed to check project: {e.msg}"
 
-  # Dependency Management Tools
+  # ============================================================================
+  # DEPENDENCY MANAGEMENT TOOLS
+  # Tools for managing project dependencies and development packages
+  # ============================================================================
+
   mcpTool:
     proc nimbleDevelopPackage(action: string, path: string = ""): string {.gcsafe.} =
-      ## Manage development dependencies (add/remove/list)
+      ## Manage development dependencies for local package development. Allows linking to
+      ## local package directories for development and testing before publishing. Use this
+      ## when working on multiple related packages or contributing to other projects.
+      ## - action: Action to perform ("add" to link local package, "remove" to unlink, "list" to show current links)
+      ## - path: Local path to package directory (required for "add" action, ignored for others)
       try:
         withGenie:
           let currentPath = getCurrentDir()
@@ -812,7 +911,10 @@ Use searchSymbols to search across all indexed code.
 
   mcpTool:
     proc nimbleUpgradePackages(packageName: string = ""): string {.gcsafe.} =
-      ## Upgrade packages to latest versions
+      ## Upgrade installed packages to their latest available versions, respecting version constraints.
+      ## Can upgrade all packages or a specific package. Use this to get bug fixes, new features,
+      ## and security updates from package dependencies.
+      ## - packageName: Optional name of specific package to upgrade (if empty, upgrades all packages)
       try:
         withGenie:
           let currentPath = getCurrentDir()
@@ -823,7 +925,9 @@ Use searchSymbols to search across all indexed code.
 
   mcpTool:
     proc nimbleDumpDependencies(): string {.gcsafe.} =
-      ## Export current project dependency information
+      ## Export detailed dependency information for the current project in machine-readable format.
+      ## Shows all direct and transitive dependencies with versions, paths, and metadata.
+      ## Use this for build automation, dependency analysis, or project documentation.
       try:
         withGenie:
           let currentPath = getCurrentDir()
@@ -832,10 +936,17 @@ Use searchSymbols to search across all indexed code.
       except Exception as e:
         return fmt"Failed to dump dependencies: {e.msg}"
 
-  # Project Information Tools
+  # ============================================================================
+  # PROJECT INFORMATION TOOLS
+  # Tools for querying project and package information, dependencies, and metadata
+  # ============================================================================
+
   mcpTool:
     proc nimblePackageInfo(packageName: string): string {.gcsafe.} =
-      ## Get detailed information about a package
+      ## Get comprehensive information about a specific package including description, version,
+      ## author, license, dependencies, and installation details. Use this to learn about
+      ## packages before installing them or to get documentation links and usage information.
+      ## - packageName: Name of the package to get information about (can be installed or from registry)
       try:
         withGenie:
           let currentPath = getCurrentDir()
@@ -846,7 +957,10 @@ Use searchSymbols to search across all indexed code.
 
   mcpTool:
     proc nimbleShowDependencies(showTree: bool = false): string {.gcsafe.} =
-      ## Display project dependency information
+      ## Display the dependency structure of the current project, showing direct and transitive
+      ## dependencies with their versions and relationships. Use this to understand project
+      ## dependencies, diagnose version conflicts, or document project requirements.
+      ## - showTree: If true, display dependencies in tree format showing the dependency hierarchy; if false, show flat list
       try:
         withGenie:
           let currentPath = getCurrentDir()
@@ -857,7 +971,10 @@ Use searchSymbols to search across all indexed code.
 
   mcpTool:
     proc nimblePackageVersions(packageName: string): string {.gcsafe.} =
-      ## List available versions for a package
+      ## List all available versions of a specific package in the Nimble registry.
+      ## Shows version numbers, release dates, and compatibility information. Use this
+      ## to choose appropriate versions for installation or to check update availability.
+      ## - packageName: Name of the package to check versions for
       try:
         withGenie:
           let currentPath = getCurrentDir()
@@ -868,7 +985,10 @@ Use searchSymbols to search across all indexed code.
 
   mcpTool:
     proc nimbleShowProject(property: string = ""): string {.gcsafe.} =
-      ## Display current project configuration
+      ## Display current project configuration from the .nimble file including name, version,
+      ## description, dependencies, build settings, and other metadata. Use this to understand
+      ## project structure and verify configuration settings.
+      ## - property: Optional specific property to show (e.g., "name", "version", "dependencies"); if empty, shows all properties
       try:
         withGenie:
           let currentPath = getCurrentDir()
@@ -879,7 +999,9 @@ Use searchSymbols to search across all indexed code.
 
   mcpTool:
     proc nimbleProjectStatus(): string {.gcsafe.} =
-      ## Check if current directory is a Nimble project and show status
+      ## Check if the current directory is a valid Nimble project and display comprehensive status
+      ## information including project type, dependencies, indexing status, and any issues.
+      ## Use this as a diagnostic tool to verify project setup and troubleshoot problems.
       try:
         withGenie:
           let currentPath = getCurrentDir()
