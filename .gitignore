@@ -47,3 +47,6 @@ dist/
 
 # Documentation
 htmldocs/
+
+# Roocode
+.roo/
