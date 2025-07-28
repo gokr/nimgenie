@@ -142,16 +142,17 @@ proc openGenie*(config: Config): NimGenie =
   discoverNimblePackages(result)
 
 # MIME type detection utilities
-var mimeDB: MimeDb
+var mimeDB: ptr MimeDb
 var mimeDBInitialized = false
 
-proc initMimeTypes() =
+proc initMimeTypes() {.gcsafe.} =
   ## Initialize MIME type database
   if not mimeDBInitialized:
-    mimeDB = newMimetypes()
+    mimeDB = cast[ptr MimeDb](alloc0(sizeof(MimeDb)))
+    mimeDB[] = newMimetypes()
     mimeDBInitialized = true
 
-proc detectMimeType*(filePath: string): string =
+proc detectMimeType*(filePath: string): string {.gcsafe.} =
   ## Detect MIME type from file extension
   if not mimeDBInitialized:
     initMimeTypes()
@@ -177,7 +178,7 @@ proc detectMimeType*(filePath: string): string =
   of ".gz": "application/gzip"
   else:
     try:
-      mimeDB.getMimetype(ext)
+      mimeDB[].getMimetype(ext)
     except:
       "application/octet-stream"  # Default for unknown types
 
@@ -590,16 +591,23 @@ Use searchSymbols to search across all indexed code.
       ## - symbolType: Optional filter by symbol type (e.g., "proc", "type", "var", "const", "template", "macro")
       ## - moduleName: Optional filter to search only within a specific module or package
       try:
-        withGenie:
-          # Check cache first
-          let cacheKey = fmt"{query}:{symbolType}:{moduleName}"
-          if genie.symbolCache.hasKey(cacheKey):
-            return $genie.symbolCache[cacheKey]
-          
-          let results = genie.database.searchSymbols(query, symbolType, moduleName, limit = 1000)
+        # Check cache first (symbol cache access)
+        let cacheKey = fmt"{query}:{symbolType}:{moduleName}"
+        block cacheCheck:
+          withSymbolCache:
+            if genie.symbolCache.hasKey(cacheKey):
+              return $genie.symbolCache[cacheKey]
+        
+        # Database operation (no locks needed - database is thread-safe)
+        let results = block:
+          {.cast(gcsafe).}:
+            genie.database.searchSymbols(query, symbolType, moduleName, limit = 1000)
+        
+        # Update cache (symbol cache access)
+        withSymbolCache:
           genie.symbolCache[cacheKey] = results
-          
-          return $results
+        
+        return $results
       except Exception as e:
         return fmt"Search failed: {e.msg}"
         
@@ -611,15 +619,21 @@ Use searchSymbols to search across all indexed code.
       ## - symbolName: Exact name of the symbol to look up
       ## - moduleName: Optional module name to disambiguate symbols with the same name in different modules
       try:
-        withGenie:
-          let cacheKey = fmt"info:{symbolName}:{moduleName}"
-          if genie.symbolCache.hasKey(cacheKey):
-            return $genie.symbolCache[cacheKey]
-          
-          let info = genie.database.getSymbolInfo(symbolName, moduleName)
+        # Check cache first (symbol cache access)
+        let cacheKey = fmt"info:{symbolName}:{moduleName}"
+        block cacheCheck:
+          withSymbolCache:
+            if genie.symbolCache.hasKey(cacheKey):
+              return $genie.symbolCache[cacheKey]
+        
+        # Database operation (no locks needed - database is thread-safe)
+        let info = cast[proc(): JsonNode {.gcsafe.}](proc(): JsonNode = genie.database.getSymbolInfo(symbolName, moduleName))()
+        
+        # Update cache (symbol cache access)
+        withSymbolCache:
           genie.symbolCache[cacheKey] = info
-          
-          return $info
+        
+        return $info
       except Exception as e:
         return fmt"Failed to get symbol info: {e.msg}"
 
@@ -638,7 +652,7 @@ Use searchSymbols to search across all indexed code.
         if limit > 50:
           return "Error: Maximum limit is 50 results"
           
-        withGenie:
+        {.cast(gcsafe).}:
           # Database operation (no locks needed - database is thread-safe)
           # Create embedding generator
           let embeddingGen = newEmbeddingGenerator(genie.config)
@@ -668,12 +682,16 @@ Use searchSymbols to search across all indexed code.
       try:
         # Database operation (no locks needed - database is thread-safe)
         # First get the target symbol's embedding
-        let symbolInfo = genie.database.getSymbolInfo(symbolName, moduleName)
+        let symbolInfo = block:
+          {.cast(gcsafe).}:
+            genie.database.getSymbolInfo(symbolName, moduleName)
         if symbolInfo.hasKey("error"):
           return fmt"Symbol not found: {symbolName}"
         
         # For now, use placeholder - will be enhanced with actual vector similarity
-        let results = genie.database.findSimilarByEmbedding("", -1, limit)
+        let results = block:
+          {.cast(gcsafe).}:
+            genie.database.findSimilarByEmbedding("", -1, limit)
         return $results
       except Exception as e:
         return fmt"Failed to find similar symbols: {e.msg}"
@@ -691,7 +709,9 @@ Use searchSymbols to search across all indexed code.
           
         # Database operation (no locks needed - database is thread-safe)
         # Create embedding generator
-        let embeddingGen = newEmbeddingGenerator(genie.config)
+        let embeddingGen = block:
+          {.cast(gcsafe).}:
+            newEmbeddingGenerator(genie.config)
         if not embeddingGen.available:
           return "Error: Ollama not available. Please ensure Ollama is running with an embedding model."
         
@@ -701,7 +721,9 @@ Use searchSymbols to search across all indexed code.
           return fmt"Error generating code embedding: {snippetEmbResult.error}"
         
         let snippetEmbedding = embeddingToJson(snippetEmbResult.embedding)
-        let results = genie.database.findSimilarByEmbedding(snippetEmbedding, -1, limit)
+        let results = block:
+          {.cast(gcsafe).}:
+            genie.database.findSimilarByEmbedding(snippetEmbedding, -1, limit)
         
         return $results
       except Exception as e:
@@ -720,7 +742,9 @@ Use searchSymbols to search across all indexed code.
           
         # Database operation (no locks needed - database is thread-safe)
         # Create embedding generator
-        let embeddingGen = newEmbeddingGenerator(genie.config)
+        let embeddingGen = block:
+          {.cast(gcsafe).}:
+            newEmbeddingGenerator(genie.config)
         if not embeddingGen.available:
           return "Error: Ollama not available. Please ensure Ollama is running with an embedding model."
         
@@ -731,7 +755,9 @@ Use searchSymbols to search across all indexed code.
           return fmt"Error generating concept embedding: {conceptEmbResult.error}"
         
         let conceptEmbedding = embeddingToJson(conceptEmbResult.embedding)
-        let results = genie.database.semanticSearchSymbols(conceptEmbedding, "", "", limit)
+        let results = block:
+          {.cast(gcsafe).}:
+            genie.database.semanticSearchSymbols(conceptEmbedding, "", "", limit)
         
         return $results
       except Exception as e:
@@ -751,7 +777,9 @@ Use searchSymbols to search across all indexed code.
       try:
         # Database operation (no locks needed - database is thread-safe)
         # Create embedding generator
-        let embeddingGen = newEmbeddingGenerator(genie.config)
+        let embeddingGen = block:
+          {.cast(gcsafe).}:
+            newEmbeddingGenerator(genie.config)
         if not embeddingGen.available:
           return "Error: Ollama not available. Please ensure Ollama is running with an embedding model."
         
@@ -767,7 +795,9 @@ Use searchSymbols to search across all indexed code.
       ## monitoring embedding quality and coverage across the codebase.
       try:
         # Database operation (no locks needed - database is thread-safe)
-        let stats = genie.database.getEmbeddingStats()
+        let stats = block:
+          {.cast(gcsafe).}:
+            genie.database.getEmbeddingStats()
         return $stats
       except Exception as e:
         return fmt"Failed to get embedding stats: {e.msg}"
@@ -804,7 +834,9 @@ Use searchSymbols to search across all indexed code.
       ## and structure of the analyzed codebase and verify that indexing completed successfully.
       try:
         # Database operation (no locks needed - database is thread-safe)
-        let stats = genie.database.getProjectStats()
+        let stats = block:
+          {.cast(gcsafe).}:
+            genie.database.getProjectStats()
         return $stats
       except Exception as e:
         return fmt"Failed to get project stats: {e.msg}"
@@ -844,7 +876,9 @@ Use searchSymbols to search across all indexed code.
       ## verify that resources have been registered correctly.
       try:
         # Database operation (no locks needed - database is thread-safe)
-        let dirData = genie.database.getRegisteredDirectories()
+        let dirData = block:
+          {.cast(gcsafe).}:
+            genie.database.getRegisteredDirectories()
         return $dirData
       except Exception as e:
         return fmt"Error listing directory resources: {e.msg}"
@@ -917,7 +951,9 @@ Use searchSymbols to search across all indexed code.
             )
         
         # Database operation (no locks needed - database is thread-safe)
-        let indexer = newIndexer(genie.database, packagePath, genie.config)
+        let indexer = block:
+          {.cast(gcsafe).}:
+            newIndexer(genie.database, packagePath, genie.config)
         let indexResult = indexer.indexProject()
         
         # Clear cache after reindexing (symbol cache access)
@@ -1022,7 +1058,9 @@ Use searchSymbols to search across all indexed code.
         
         # After successful project initialization, automatically index it
         if nimbleResult.success:
-          let indexer = newIndexer(genie.database, currentPath, genie.config)
+          let indexer = block:
+            {.cast(gcsafe).}:
+              newIndexer(genie.database, currentPath, genie.config)
           let indexResult = indexer.indexProject()
           # Clear cache after reindexing (symbol cache access)
           withSymbolCache:
