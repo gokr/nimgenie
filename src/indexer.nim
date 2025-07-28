@@ -227,7 +227,8 @@ proc parseAndStoreDependencies*(indexer: Indexer): bool =
     
     if depResult["status"].getStr() != "success":
       echo "Failed to get dependencies: ", depResult["message"].getStr()
-      return false
+      # Don't return false - allow indexing to continue even if dependencies fail
+      return true
     
     let depOutput = depResult["dependencies"].getStr()
     let lines = depOutput.splitLines()
@@ -235,6 +236,7 @@ proc parseAndStoreDependencies*(indexer: Indexer): bool =
     # Clear existing dependencies for this project
     indexer.database.clearFileDependencies()
     
+    var storedCount = 0
     for line in lines:
       let trimmed = line.strip()
       if trimmed == "" or trimmed.startsWith("digraph") or trimmed == "}" or trimmed == "{":
@@ -262,16 +264,16 @@ proc parseAndStoreDependencies*(indexer: Indexer): bool =
         let absSource = if isAbsolute(sourceFile): sourceFile else: indexer.projectPath / sourceFile
         let absTarget = if isAbsolute(targetFile): targetFile else: indexer.projectPath / targetFile
         
-        # Insert the dependency
-        if not indexer.database.insertFileDependency(absSource, absTarget):
-          echo fmt"Failed to store dependency: {absSource} -> {absTarget}"
-          return false
+        # Insert the dependency - don't fail if individual insertion fails
+        if indexer.database.insertFileDependency(absSource, absTarget):
+          storedCount.inc()
     
-    echo fmt"Successfully stored {lines.len} dependencies"
+    echo fmt"Successfully stored {storedCount} dependencies"
     return true
   except Exception as e:
     echo "Error parsing and storing dependencies: ", e.msg
-    return false
+    # Don't fail the entire indexing process due to dependency issues
+    return true
 
 proc indexProject*(indexer: Indexer): string =
   ## Index the entire project using dependency analysis
