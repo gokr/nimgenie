@@ -321,24 +321,47 @@ proc indexProject*(indexer: Indexer): string =
         when not defined(testing):
           echo fmt"✗ Failed to index {extractFilename(filePath)}"
     
-    # Try project-wide indexing as well
+    # Try project-wide indexing as well - look for a main nim file
     when not defined(testing):
       echo "Attempting project-wide indexing..."
-    let projectResult = indexer.analyzer.execNimCommand("doc", @["--index:on", "--project", indexer.projectPath.absolutePath])
     
-    if projectResult.exitCode == 0:
+    # Find a suitable main nim file for project indexing
+    var mainFile = ""
+    
+    # Look for common main file patterns
+    let possibleMainFiles = [
+      indexer.projectPath / (extractFilename(indexer.projectPath) & ".nim"),
+      indexer.projectPath / "src" / (extractFilename(indexer.projectPath) & ".nim"),
+      indexer.projectPath / "main.nim",
+      indexer.projectPath / "src" / "main.nim"
+    ]
+    
+    for candidate in possibleMainFiles:
+      if fileExists(candidate):
+        mainFile = candidate
+        break
+    
+    # If no main file found, just skip project-wide indexing
+    if mainFile == "":
       when not defined(testing):
-        echo "✓ Project-wide indexing completed"
-      
-      # Look for generated .idx files
-      for kind, path in walkDir(indexer.projectPath):
-        if kind == pcFile and path.endsWith(".idx"):
-          let idxSymbols = indexer.parseNimIdxFile(path)
-          if idxSymbols > 0:
-            totalSymbols += idxSymbols
-            echo fmt"✓ Processed {extractFilename(path)}: {idxSymbols} symbols"
+        echo "No main file found for project-wide indexing, skipping..."
     else:
-      echo fmt"Project-wide indexing failed: {projectResult.output}"
+      let projectResult = indexer.analyzer.execNimCommand("doc", @["--index:on", "--project", mainFile])
+      
+      if projectResult.exitCode == 0:
+        when not defined(testing):
+          echo "✓ Project-wide indexing completed"
+        
+        # Look for generated .idx files
+        for kind, path in walkDir(indexer.projectPath):
+          if kind == pcFile and path.endsWith(".idx"):
+            let idxSymbols = indexer.parseNimIdxFile(path)
+            if idxSymbols > 0:
+              totalSymbols += idxSymbols
+              echo fmt"✓ Processed {extractFilename(path)}: {idxSymbols} symbols"
+      else:
+        when not defined(testing):
+          echo fmt"Project-wide indexing failed: {projectResult.output}"
     
     let summary = fmt"""
 Project indexing completed:
