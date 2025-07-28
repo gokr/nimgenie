@@ -1,4 +1,5 @@
-import std/[json, strutils, strformat, osproc, os, options]
+import std/[json, strutils, strformat, osproc, os, options, streams]
+import nimcp
 
 type
   NimbleResult* = object
@@ -112,6 +113,66 @@ proc nimbleBuild*(workingDir: string, target: string = "", mode: string = ""): N
     
   return cmd.executeNimble(args)
 
+proc nimbleBuildWithStreaming*(ctx: McpRequestContext, workingDir: string, target: string = "", mode: string = ""): NimbleResult =
+  ## Build project with optional target and mode and real-time streaming output
+  result.data = newJNull()
+  
+  try:
+    var args = @["build"]
+    
+    if target.len > 0:
+      args.add(target)
+    
+    if mode.len > 0:
+      args.add("--define:" & mode)
+    
+    let fullCommand = "nimble " & args.join(" ")
+    ctx.info(fmt"Starting build: {fullCommand}")
+    
+    # Start the process for streaming output
+    let process = startProcess(
+      command = fullCommand,
+      workingDir = workingDir,
+      options = {poEvalCommand, poUsePath, poStdErrToStdOut}
+    )
+    
+    var outputLines: seq[string] = @[]
+    var line: string
+    
+    # Read output line by line and stream it
+    while readLine(process.outputStream, line):
+      outputLines.add(line)
+      
+      # Stream the line to the client in real-time
+      ctx.info(line)
+      
+      # Check if we should exit early due to cancellation
+      if ctx.isCancelled():
+        process.terminate()
+        result.success = false
+        result.errorMsg = "Build was cancelled"
+        result.output = outputLines.join("\n")
+        return
+    
+    # Wait for process to complete and get exit code
+    let exitCode = process.waitForExit()
+    process.close()
+    
+    result.output = outputLines.join("\n")
+    result.success = exitCode == 0
+    
+    if not result.success:
+      result.errorMsg = fmt"Nimble build failed with exit code {exitCode}"
+      ctx.info(fmt"Build completed with exit code: {exitCode}")
+    else:
+      ctx.info("Build completed successfully")
+    
+  except Exception as e:
+    result.success = false
+    result.errorMsg = fmt"Failed to execute nimble build: {e.msg}"
+    result.output = ""
+    ctx.info(fmt"Build execution failed: {e.msg}")
+
 proc nimbleTest*(workingDir: string, testFilter: string = ""): NimbleResult =
   ## Run project tests with optional filtering
   let cmd = newNimbleCommand(workingDir)
@@ -119,6 +180,62 @@ proc nimbleTest*(workingDir: string, testFilter: string = ""): NimbleResult =
     return cmd.executeNimble("test", testFilter)
   else:
     return cmd.executeNimble("test")
+
+proc nimbleTestWithStreaming*(ctx: McpRequestContext, workingDir: string, testFilter: string = ""): NimbleResult =
+  ## Run project tests with optional filtering and real-time streaming output
+  result.data = newJNull()
+  
+  try:
+    var args = @["test"]
+    if testFilter.len > 0:
+      args.add(testFilter)
+    
+    let fullCommand = "nimble " & args.join(" ")
+    ctx.info(fmt"Starting test execution: {fullCommand}")
+    
+    # Start the process for streaming output
+    let process = startProcess(
+      command = fullCommand,
+      workingDir = workingDir,
+      options = {poEvalCommand, poUsePath, poStdErrToStdOut}
+    )
+    
+    var outputLines: seq[string] = @[]
+    var line: string
+    
+    # Read output line by line and stream it
+    while readLine(process.outputStream, line):
+      outputLines.add(line)
+      
+      # Stream the line to the client in real-time
+      ctx.info(line)
+      
+      # Check if we should exit early due to cancellation
+      if ctx.isCancelled():
+        process.terminate()
+        result.success = false
+        result.errorMsg = "Test execution was cancelled"
+        result.output = outputLines.join("\n")
+        return
+    
+    # Wait for process to complete and get exit code
+    let exitCode = process.waitForExit()
+    process.close()
+    
+    result.output = outputLines.join("\n")
+    result.success = exitCode == 0
+    
+    if not result.success:
+      result.errorMsg = fmt"Nimble test failed with exit code {exitCode}"
+      ctx.info(fmt"Test execution completed with exit code: {exitCode}")
+    else:
+      ctx.info("Test execution completed successfully")
+    
+  except Exception as e:
+    result.success = false
+    result.errorMsg = fmt"Failed to execute nimble test: {e.msg}"
+    result.output = ""
+    ctx.info(fmt"Test execution failed: {e.msg}")
 
 proc nimbleRun*(workingDir: string, target: string, args: seq[string] = @[]): NimbleResult =
   ## Execute project binary with arguments

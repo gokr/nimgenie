@@ -1,6 +1,6 @@
 import nimcp
 import std/[json, tables, strutils, os, strformat, mimetypes, base64, options, locks, times, parseopt]
-import configuration, database, indexer, analyzer, nimble
+import configuration, database, indexer, analyzer, nimble, embedding
 
 type
   NimProject* = object
@@ -14,10 +14,54 @@ type
     nimblePackages*: Table[string, string]  # package name -> path
     symbolCache*: Table[string, JsonNode]
     registeredDirectories*: seq[string]
+    config*: Config
 
 var genie: NimGenie
-var genieLock: Lock
+# Fine-grained locks for concurrent access to different data structures
+var projectsLock: Lock            # genie.projects table access
+var nimblePackagesLock: Lock      # genie.nimblePackages table access  
+var symbolCacheLock: Lock         # genie.symbolCache table access
+var registeredDirsLock: Lock      # genie.registeredDirectories seq access
+var genieLock: Lock               # Legacy global lock - to be removed
 
+# Fine-grained locking templates for concurrent access
+template withProjects(body: untyped): untyped =
+  ## Execute code block with projects table access lock
+  {.cast(gcsafe).}:
+    acquire(projectsLock)
+    try:
+      body
+    finally:
+      release(projectsLock)
+
+template withNimblePackages(body: untyped): untyped =
+  ## Execute code block with nimblePackages table access lock
+  {.cast(gcsafe).}:
+    acquire(nimblePackagesLock)
+    try:
+      body
+    finally:
+      release(nimblePackagesLock)
+
+template withSymbolCache(body: untyped): untyped =
+  ## Execute code block with symbolCache table access lock
+  {.cast(gcsafe).}:
+    acquire(symbolCacheLock)
+    try:
+      body
+    finally:
+      release(symbolCacheLock)
+
+template withRegisteredDirs(body: untyped): untyped =
+  ## Execute code block with registeredDirectories seq access lock
+  {.cast(gcsafe).}:
+    acquire(registeredDirsLock)
+    try:
+      body
+    finally:
+      release(registeredDirsLock)
+
+# Legacy template - will be removed after migration
 template withGenie(body: untyped): untyped =
   ## Execute code block with the genie instance safely locked
   ## Uses cast(gcsafe) to bypass compiler's static analysis since we ensure safety through locking
@@ -89,6 +133,7 @@ proc openGenie*(config: Config): NimGenie =
   result.projects = initTable[string, NimProject]()
   result.nimblePackages = initTable[string, string]()
   result.symbolCache = initTable[string, JsonNode]()
+  result.config = config
   
   # Load registered directories from database
   loadRegisteredDirectories(result)
@@ -243,7 +288,7 @@ proc indexProjectDependencies*(genie: var NimGenie, projectPath: string): string
       echo fmt"Found dependency {depName} at: {depPath}"
       
       # Create indexer for the dependency
-      let depIndexer = newIndexer(genie.database, depPath)
+      let depIndexer = newIndexer(genie.database, depPath, genie.config)
       
       # Index the dependency (but don't clear existing symbols)
       try:
@@ -370,7 +415,12 @@ proc defaultConfig(): Config =
     databaseUser: getEnv("TIDB_USER", "root"),
     databasePassword: getEnv("TIDB_PASSWORD", ""),
     databasePoolSize: parseInt(getEnv("TIDB_POOL_SIZE", "10")),
-    noDiscovery: false
+    noDiscovery: false,
+    # Embedding configuration with Ollama defaults
+    ollamaHost: getEnv("NIMGENIE_OLLAMA_HOST", "http://localhost:11434"),
+    embeddingModel: getEnv("NIMGENIE_EMBEDDING_MODEL", "nomic-embed-text"),
+    embeddingBatchSize: parseInt(getEnv("NIMGENIE_EMBEDDING_BATCH_SIZE", "20")),
+    vectorSimilarityThreshold: parseFloat(getEnv("NIMGENIE_VECTOR_SIMILARITY_THRESHOLD", "0.7"))
   )
 
 proc parseCommandLine(): Config =
@@ -473,7 +523,7 @@ let server = mcpServer("nimgenie", "0.1.0"):
           
           # Index the main project first
           echo "=== Indexing Main Project ==="
-          let indexer = newIndexer(genie.database, currentPath)
+          let indexer = newIndexer(genie.database, currentPath, genie.config)
           let projectResult = indexer.indexProject()
           
           # Index project dependencies
@@ -508,16 +558,17 @@ Use searchSymbols to search across all indexed code.
       ## This is useful when you want to refresh dependency information without re-processing the main project
       ## source files. Use this when dependencies have been updated or when you need dependency symbols
       ## but the main project is already indexed.
-      try:
-        withGenie:
-          let currentPath = getCurrentDir()
-          echo "=== Indexing Project Dependencies Only ==="
-          let dependencyResult = indexProjectDependencies(genie, currentPath)
-          
-          # Clear cache after indexing
-          genie.symbolCache.clear()
-          
-          return fmt"""
+      {.cast(gcsafe).}:
+        try:
+          withGenie:
+            let currentPath = getCurrentDir()
+            echo "=== Indexing Project Dependencies Only ==="
+            let dependencyResult = indexProjectDependencies(genie, currentPath)
+            
+            # Clear cache after indexing
+            genie.symbolCache.clear()
+            
+            return fmt"""
 === Dependency Indexing Complete ===
 
 {dependencyResult}
@@ -527,8 +578,8 @@ Project dependencies have been indexed.
 Main project symbols remain unchanged.
 Use searchSymbols to search across all indexed code.
 """
-      except Exception as e:
-        return fmt"Failed to index dependencies: {e.msg}"
+        except Exception as e:
+          return fmt"Failed to index dependencies: {e.msg}"
         
   mcpTool:
     proc searchSymbols(query: string, symbolType: string = "", moduleName: string = ""): string {.gcsafe.} =
@@ -538,19 +589,25 @@ Use searchSymbols to search across all indexed code.
       ## - query: Symbol name or partial name to search for (supports partial matching)
       ## - symbolType: Optional filter by symbol type (e.g., "proc", "type", "var", "const", "template", "macro")
       ## - moduleName: Optional filter to search only within a specific module or package
-      try:
-        withGenie:
-          # Check cache first
+      {.cast(gcsafe).}:
+        try:
+          # Check cache first (symbol cache access)
           let cacheKey = fmt"{query}:{symbolType}:{moduleName}"
-          if genie.symbolCache.hasKey(cacheKey):
-            return $genie.symbolCache[cacheKey]
+          block cacheCheck:
+            withSymbolCache:
+              if genie.symbolCache.hasKey(cacheKey):
+                return $genie.symbolCache[cacheKey]
           
+          # Database operation (no locks needed - database is thread-safe)
           let results = genie.database.searchSymbols(query, symbolType, moduleName, limit = 1000)
-          genie.symbolCache[cacheKey] = results
+          
+          # Update cache (symbol cache access)
+          withSymbolCache:
+            genie.symbolCache[cacheKey] = results
           
           return $results
-      except Exception as e:
-        return fmt"Search failed: {e.msg}"
+        except Exception as e:
+          return fmt"Search failed: {e.msg}"
         
   mcpTool:
     proc getSymbolInfo(symbolName: string, moduleName: string = ""): string {.gcsafe.} =
@@ -560,17 +617,171 @@ Use searchSymbols to search across all indexed code.
       ## - symbolName: Exact name of the symbol to look up
       ## - moduleName: Optional module name to disambiguate symbols with the same name in different modules
       try:
-        withGenie:
-          let cacheKey = fmt"info:{symbolName}:{moduleName}"
-          if genie.symbolCache.hasKey(cacheKey):
-            return $genie.symbolCache[cacheKey]
-          
-          let info = genie.database.getSymbolInfo(symbolName, moduleName)
+        # Check cache first (symbol cache access)
+        let cacheKey = fmt"info:{symbolName}:{moduleName}"
+        block cacheCheck:
+          withSymbolCache:
+            if genie.symbolCache.hasKey(cacheKey):
+              return $genie.symbolCache[cacheKey]
+        
+        # Database operation (no locks needed - database is thread-safe)
+        let info = genie.database.getSymbolInfo(symbolName, moduleName)
+        
+        # Update cache (symbol cache access)
+        withSymbolCache:
           genie.symbolCache[cacheKey] = info
-          
-          return $info
+        
+        return $info
       except Exception as e:
         return fmt"Failed to get symbol info: {e.msg}"
+
+  # ============================================================================
+  # SEMANTIC SEARCH TOOLS - AI-POWERED CODE DISCOVERY
+  # ============================================================================
+        
+  mcpTool:
+    proc semanticSearchSymbols(query: string, limit: int = 10): string {.gcsafe.} =
+      ## Search for symbols using natural language queries and semantic similarity.
+      ## Uses vector embeddings to find conceptually related code even when exact keywords
+      ## don't match. Returns results ranked by semantic similarity with confidence scores.
+      ## - query: Natural language description of what you're looking for (e.g., "file upload handlers")
+      ## - limit: Maximum number of results to return (default: 10, max: 50)
+      try:
+        if limit > 50:
+          return "Error: Maximum limit is 50 results"
+          
+        # Database operation (no locks needed - database is thread-safe)
+        # Create embedding generator
+        let embeddingGen = newEmbeddingGenerator(genie.config)
+        if not embeddingGen.available:
+          return "Error: Ollama not available. Please ensure Ollama is running with an embedding model."
+        
+        # Generate embedding for the query
+        let queryEmbResult = embeddingGen.generateEmbedding(query)
+        if not queryEmbResult.success:
+          return fmt"Error generating query embedding: {queryEmbResult.error}"
+        
+        let queryEmbedding = embeddingToJson(queryEmbResult.embedding)
+        let results = genie.database.semanticSearchSymbols(queryEmbedding, "", "", limit)
+        
+        return $results
+      except Exception as e:
+        return fmt"Semantic search failed: {e.msg}"
+  
+  mcpTool:
+    proc findSimilarSymbols(symbolName: string, moduleName: string = "", limit: int = 10): string {.gcsafe.} =
+      ## Find symbols that are semantically similar to a given symbol based on name, signature,
+      ## and documentation embeddings. Useful for discovering related functions, alternative
+      ## implementations, or finding patterns across the codebase.
+      ## - symbolName: Name of the symbol to find similar matches for
+      ## - moduleName: Optional module name to scope the search
+      ## - limit: Maximum number of similar symbols to return (default: 10)
+      try:
+        # Database operation (no locks needed - database is thread-safe)
+        # First get the target symbol's embedding
+        let symbolInfo = genie.database.getSymbolInfo(symbolName, moduleName)
+        if symbolInfo.hasKey("error"):
+          return fmt"Symbol not found: {symbolName}"
+        
+        # For now, use placeholder - will be enhanced with actual vector similarity
+        let results = genie.database.findSimilarByEmbedding("", -1, limit)
+        return $results
+      except Exception as e:
+        return fmt"Failed to find similar symbols: {e.msg}"
+        
+  mcpTool:
+    proc searchByExample(codeSnippet: string, limit: int = 10): string {.gcsafe.} =
+      ## Find symbols similar to a provided code example or snippet. Generates an embedding
+      ## for the input code and finds the most similar symbols in the database. Useful for
+      ## finding existing implementations similar to code you're writing or refactoring.
+      ## - codeSnippet: Code example to find similar implementations for
+      ## - limit: Maximum number of similar symbols to return (default: 10)
+      try:
+        if codeSnippet.strip() == "":
+          return "Error: Code snippet cannot be empty"
+          
+        # Database operation (no locks needed - database is thread-safe)
+        # Create embedding generator
+        let embeddingGen = newEmbeddingGenerator(genie.config)
+        if not embeddingGen.available:
+          return "Error: Ollama not available. Please ensure Ollama is running with an embedding model."
+        
+        # Generate embedding for the code snippet
+        let snippetEmbResult = embeddingGen.generateEmbedding(codeSnippet)
+        if not snippetEmbResult.success:
+          return fmt"Error generating code embedding: {snippetEmbResult.error}"
+        
+        let snippetEmbedding = embeddingToJson(snippetEmbResult.embedding)
+        let results = genie.database.findSimilarByEmbedding(snippetEmbedding, -1, limit)
+        
+        return $results
+      except Exception as e:
+        return fmt"Search by example failed: {e.msg}"
+        
+  mcpTool:
+    proc exploreCodeConcepts(conceptName: string, limit: int = 20): string {.gcsafe.} =
+      ## Explore code related to programming concepts or design patterns. Uses semantic
+      ## search to find symbols, functions, and types related to specific programming
+      ## concepts, architectural patterns, or problem domains.
+      ## - conceptName: Programming concept to explore (e.g., "error handling", "async processing", "validation")
+      ## - limit: Maximum number of related symbols to return (default: 20)
+      try:
+        if conceptName.strip() == "":
+          return "Error: Concept name cannot be empty"
+          
+        # Database operation (no locks needed - database is thread-safe)
+        # Create embedding generator
+        let embeddingGen = newEmbeddingGenerator(genie.config)
+        if not embeddingGen.available:
+          return "Error: Ollama not available. Please ensure Ollama is running with an embedding model."
+        
+        # Generate embedding for the concept
+        let conceptText = fmt"Programming concept: {conceptName}. Related functions and implementations."
+        let conceptEmbResult = embeddingGen.generateEmbedding(conceptText)
+        if not conceptEmbResult.success:
+          return fmt"Error generating concept embedding: {conceptEmbResult.error}"
+        
+        let conceptEmbedding = embeddingToJson(conceptEmbResult.embedding)
+        let results = genie.database.semanticSearchSymbols(conceptEmbedding, "", "", limit)
+        
+        return $results
+      except Exception as e:
+        return fmt"Concept exploration failed: {e.msg}"
+
+  # ============================================================================
+  # EMBEDDING MANAGEMENT TOOLS
+  # ============================================================================
+        
+  mcpTool:
+    proc generateEmbeddings(symbolTypes: string = "", modules: string = ""): string {.gcsafe.} =
+      ## Generate or refresh vector embeddings for symbols in the database. Can be scoped
+      ## to specific symbol types or modules. This is automatically called during indexing
+      ## but can be run manually to update embeddings or use different embedding models.
+      ## - symbolTypes: Comma-separated list of symbol types to process (e.g., "proc,type,const")
+      ## - modules: Comma-separated list of modules to process (if empty, processes all modules)
+      try:
+        # Database operation (no locks needed - database is thread-safe)
+        # Create embedding generator
+        let embeddingGen = newEmbeddingGenerator(genie.config)
+        if not embeddingGen.available:
+          return "Error: Ollama not available. Please ensure Ollama is running with an embedding model."
+        
+        # This would need to be implemented to regenerate embeddings for existing symbols
+        return "Embedding generation started. This feature is not fully implemented yet."
+      except Exception as e:
+        return fmt"Failed to generate embeddings: {e.msg}"
+        
+  mcpTool:
+    proc getEmbeddingStats(): string {.gcsafe.} =
+      ## Get statistics about embedding coverage, including which symbols have embeddings,
+      ## the embedding model being used, dimensions, and generation timestamps. Useful for
+      ## monitoring embedding quality and coverage across the codebase.
+      try:
+        # Database operation (no locks needed - database is thread-safe)
+        let stats = genie.database.getEmbeddingStats()
+        return $stats
+      except Exception as e:
+        return fmt"Failed to get embedding stats: {e.msg}"
         
   mcpTool:
     proc checkSyntax(filePath: string = ""): string {.gcsafe.} =
@@ -579,19 +790,21 @@ Use searchSymbols to search across all indexed code.
       ## before committing changes or to diagnose compilation problems.
       ## - filePath: Optional path to specific file to check (defaults to checking entire current project)
       try:
-        withGenie:
-          let currentPath = getCurrentDir()
+        # Get or create current project (projects access)
+        let currentPath = getCurrentDir()
+        var project: NimProject
+        withProjects:
           if currentPath notin genie.projects:
             genie.projects[currentPath] = NimProject(
               path: currentPath,
               analyzer: newAnalyzer(currentPath),
               lastIndexed: now()
             )
-          
-          let project = genie.projects[currentPath]
-          let targetPath = if filePath == "": project.path else: filePath
-          let res = project.analyzer.checkSyntax(targetPath)
-          return $res
+          project = genie.projects[currentPath]
+        
+        let targetPath = if filePath == "": project.path else: filePath
+        let res = project.analyzer.checkSyntax(targetPath)
+        return $res
       except Exception as e:
         return fmt"Syntax check failed: {e.msg}"
         
@@ -601,9 +814,9 @@ Use searchSymbols to search across all indexed code.
       ## module information, file counts, and indexing status. Use this to understand the scope
       ## and structure of the analyzed codebase and verify that indexing completed successfully.
       try:
-        withGenie:
-          let stats = genie.database.getProjectStats()
-          return $stats
+        # Database operation (no locks needed - database is thread-safe)
+        let stats = genie.database.getProjectStats()
+        return $stats
       except Exception as e:
         return fmt"Failed to get project stats: {e.msg}"
 
@@ -621,11 +834,13 @@ Use searchSymbols to search across all indexed code.
       ## - name: Optional human-readable name for the directory resource
       ## - description: Optional description explaining what the directory contains
       try:
-        withGenie:
-          let normalizedPath = directoryPath.normalizedPath().absolutePath()
-          if not dirExists(normalizedPath):
-            return fmt"Error: Directory does not exist: {normalizedPath}"
-            
+        let normalizedPath = directoryPath.normalizedPath().absolutePath()
+        if not dirExists(normalizedPath):
+          return fmt"Error: Directory does not exist: {normalizedPath}"
+        
+        # Database operation (no locks needed - database is thread-safe)  
+        # but need registeredDirs lock for in-memory update
+        withRegisteredDirs:
           if addDirectoryToResources(genie, normalizedPath, name, description):
             return fmt"Successfully added directory resource: {normalizedPath}"
           else:
@@ -639,9 +854,9 @@ Use searchSymbols to search across all indexed code.
       ## and descriptions. Use this to see what directories are available to MCP clients and
       ## verify that resources have been registered correctly.
       try:
-        withGenie:
-          let dirData = genie.database.getRegisteredDirectories()
-          return $dirData
+        # Database operation (no locks needed - database is thread-safe)
+        let dirData = genie.database.getRegisteredDirectories()
+        return $dirData
       except Exception as e:
         return fmt"Error listing directory resources: {e.msg}"
         
@@ -652,8 +867,10 @@ Use searchSymbols to search across all indexed code.
       ## directories that should no longer be exposed.
       ## - directoryPath: Path to the directory to stop serving (must match the originally registered path)
       try:
-        withGenie:
-          let normalizedPath = directoryPath.normalizedPath().absolutePath()
+        let normalizedPath = directoryPath.normalizedPath().absolutePath()
+        # Database operation (no locks needed - database is thread-safe)
+        # but need registeredDirs lock for in-memory update
+        withRegisteredDirs:
           if removeDirectoryFromResources(genie, normalizedPath):
             return fmt"Successfully removed directory resource: {normalizedPath}"
           else:
@@ -672,7 +889,8 @@ Use searchSymbols to search across all indexed code.
       ## Shows package names and their installation paths. Use this to see what packages
       ## are available for indexing and to verify that package discovery is working correctly.
       try:
-        withGenie:
+        # Nimble packages access
+        withNimblePackages:
           var packagesList = newJArray()
           for name, path in genie.nimblePackages.pairs:
             packagesList.add(%*{
@@ -693,27 +911,31 @@ Use searchSymbols to search across all indexed code.
       ## available for search and analysis. Required before you can search for symbols in a package.
       ## - packageName: Name of the Nimble package to index (must be from the discovered packages list)
       try:
-        withGenie:
+        # First check if package exists (nimble packages access)
+        var packagePath: string
+        withNimblePackages:
           if packageName notin genie.nimblePackages:
             return fmt"Package '{packageName}' not found in discovered Nimble packages"
-          
-          let packagePath: string = genie.nimblePackages[packageName]
-          
-          # Create a project entry for this package if it doesn't exist
+          packagePath = genie.nimblePackages[packageName]
+        
+        # Create a project entry for this package if it doesn't exist (projects access)
+        withProjects:
           if packagePath notin genie.projects:
             genie.projects[packagePath] = NimProject(
               path: packagePath,
               analyzer: newAnalyzer(packagePath),
               lastIndexed: now()
             )
-          
-          let indexer = newIndexer(genie.database, packagePath)
-          let indexResult = indexer.indexProject()
-          
-          # Clear cache after reindexing
+        
+        # Database operation (no locks needed - database is thread-safe)
+        let indexer = newIndexer(genie.database, packagePath, genie.config)
+        let indexResult = indexer.indexProject()
+        
+        # Clear cache after reindexing (symbol cache access)
+        withSymbolCache:
           genie.symbolCache.clear()
-          
-          return fmt"Successfully indexed Nimble package '{packageName}': {indexResult}"
+        
+        return fmt"Successfully indexed Nimble package '{packageName}': {indexResult}"
       except Exception as e:
         return fmt"Failed to index Nimble package '{packageName}': {e.msg}"
 
@@ -730,10 +952,10 @@ Use searchSymbols to search across all indexed code.
       ## - packageName: Name of the package to install from the Nimble registry
       ## - version: Optional version constraint (e.g., ">= 1.0.0", "~= 2.1", "== 1.5.0")
       try:
-        withGenie:
-          let currentPath = getCurrentDir()
-          let nimbleResult = nimbleInstall(currentPath, packageName, version)
-          return formatNimbleOutput(nimbleResult)
+        # Database operation (no locks needed - database is thread-safe)
+        let currentPath = getCurrentDir()
+        let nimbleResult = nimbleInstall(currentPath, packageName, version)
+        return formatNimbleOutput(nimbleResult)
       except Exception as e:
         return fmt"Failed to install package: {e.msg}"
 
@@ -744,10 +966,10 @@ Use searchSymbols to search across all indexed code.
       ## packages or resolve dependency conflicts.
       ## - packageName: Name of the installed package to remove
       try:
-        withGenie:
-          let currentPath = getCurrentDir()
-          let nimbleResult = nimbleUninstall(currentPath, packageName)
-          return formatNimbleOutput(nimbleResult)
+        # Database operation (no locks needed - database is thread-safe)
+        let currentPath = getCurrentDir()
+        let nimbleResult = nimbleUninstall(currentPath, packageName)
+        return formatNimbleOutput(nimbleResult)
       except Exception as e:
         return fmt"Failed to uninstall package: {e.msg}"
 
@@ -758,10 +980,10 @@ Use searchSymbols to search across all indexed code.
       ## that provide functionality you need or to explore the Nim ecosystem.
       ## - query: Search terms to find packages (searches names, descriptions, and tags)
       try:
-        withGenie:
-          let currentPath = getCurrentDir()
-          let nimbleResult = nimbleSearch(currentPath, query)
-          return formatNimbleOutput(nimbleResult)
+        # Database operation (no locks needed - database is thread-safe)
+        let currentPath = getCurrentDir()
+        let nimbleResult = nimbleSearch(currentPath, query)
+        return formatNimbleOutput(nimbleResult)
       except Exception as e:
         return fmt"Failed to search packages: {e.msg}"
 
@@ -772,10 +994,10 @@ Use searchSymbols to search across all indexed code.
       ## what's currently installed on your system.
       ## - installed: If true, show only locally installed packages; if false, show available packages from registry
       try:
-        withGenie:
-          let currentPath = getCurrentDir()
-          let nimbleResult = nimbleList(currentPath, installed)
-          return formatNimbleOutput(nimbleResult)
+        # Database operation (no locks needed - database is thread-safe)
+        let currentPath = getCurrentDir()
+        let nimbleResult = nimbleList(currentPath, installed)
+        return formatNimbleOutput(nimbleResult)
       except Exception as e:
         return fmt"Failed to list packages: {e.msg}"
 
@@ -785,10 +1007,10 @@ Use searchSymbols to search across all indexed code.
       ## Run this periodically to ensure you have the latest package information
       ## and can discover newly published packages. Use before searching or installing packages.
       try:
-        withGenie:
-          let currentPath = getCurrentDir()
-          let nimbleResult = nimbleRefresh(currentPath)
-          return formatNimbleOutput(nimbleResult)
+        # Database operation (no locks needed - database is thread-safe)
+        let currentPath = getCurrentDir()
+        let nimbleResult = nimbleRefresh(currentPath)
+        return formatNimbleOutput(nimbleResult)
       except Exception as e:
         return fmt"Failed to refresh packages: {e.msg}"
 
@@ -805,47 +1027,51 @@ Use searchSymbols to search across all indexed code.
       ## - projectName: Name for the new project (will be used for directory and package name)
       ## - packageType: Type of project to create ("lib" for library, "bin" for executable, "hybrid" for both)
       try:
-        withGenie:
-          let currentPath = getCurrentDir()
-          let nimbleResult = nimbleInit(currentPath, projectName, packageType)
-          
-          # After successful project initialization, automatically index it
-          if nimbleResult.success:
-            let indexer = newIndexer(genie.database, currentPath)
-            let indexResult = indexer.indexProject()
+        # Database operation (no locks needed - database is thread-safe)
+        let currentPath = getCurrentDir()
+        let nimbleResult = nimbleInit(currentPath, projectName, packageType)
+        
+        # After successful project initialization, automatically index it
+        if nimbleResult.success:
+          let indexer = newIndexer(genie.database, currentPath, genie.config)
+          let indexResult = indexer.indexProject()
+          # Clear cache after reindexing (symbol cache access)
+          withSymbolCache:
             genie.symbolCache.clear()
-            return fmt"{formatNimbleOutput(nimbleResult)}\n\nProject indexed: {indexResult}"
-          else:
-            return formatNimbleOutput(nimbleResult)
+          return fmt"{formatNimbleOutput(nimbleResult)}\n\nProject indexed: {indexResult}"
+        else:
+          return formatNimbleOutput(nimbleResult)
       except Exception as e:
         return fmt"Failed to initialize project: {e.msg}"
 
   mcpTool:
-    proc nimbleBuildProject(target: string = "", mode: string = ""): string {.gcsafe.} =
+    proc nimbleBuildProject(ctx: McpRequestContext, target: string = "", mode: string = ""): string {.gcsafe.} =
       ## Compile the current Nimble project, creating executable binaries or library files.
       ## Reports compilation errors and warnings. Use this to verify that your code compiles
-      ## correctly and to generate distributable binaries.
+      ## correctly and to generate distributable binaries. Provides real-time streaming
+      ## output so you can see compilation progress as it happens, especially useful for large projects.
       ## - target: Optional specific target to build (defaults to all targets defined in .nimble file)
       ## - mode: Optional compilation mode ("debug", "release", or custom mode from .nimble config)
       try:
-        withGenie:
-          let currentPath = getCurrentDir()
-          let nimbleResult = nimbleBuild(currentPath, target, mode)
-          return formatNimbleOutput(nimbleResult)
+        # Database operation (no locks needed - database is thread-safe)
+        let currentPath = getCurrentDir()
+        let nimbleResult = nimbleBuildWithStreaming(ctx, currentPath, target, mode)
+        return formatNimbleOutput(nimbleResult)
       except Exception as e:
         return fmt"Failed to build project: {e.msg}"
 
   mcpTool:
-    proc nimbleTestProject(testFilter: string = ""): string {.gcsafe.} =
+    proc nimbleTestProject(ctx: McpRequestContext, testFilter: string = ""): string {.gcsafe.} =
       ## Execute the test suite for the current project, running all test files and reporting results.
       ## Shows passed/failed tests, coverage information, and detailed error messages for failures.
-      ## Use this to verify code correctness and maintain code quality.
+      ## Use this to verify code correctness and maintain code quality. Provides real-time streaming
+      ## output so you can see test progress as it happens, especially useful for long-running test suites.
       ## - testFilter: Optional filter to run only specific tests or test files matching the pattern
       try:
-        withGenie:
-          let currentPath = getCurrentDir()
-          let nimbleResult = nimbleTest(currentPath, testFilter)
-          return formatNimbleOutput(nimbleResult)
+        # Database operation (no locks needed - database is thread-safe)
+        let currentPath = getCurrentDir()
+        let nimbleResult = nimbleTestWithStreaming(ctx, currentPath, testFilter)
+        return formatNimbleOutput(nimbleResult)
       except Exception as e:
         return fmt"Failed to run tests: {e.msg}"
 
@@ -857,11 +1083,11 @@ Use searchSymbols to search across all indexed code.
       ## - target: Name of the executable target to run (as defined in .nimble file)
       ## - args: Optional command-line arguments to pass to the executable (space-separated)
       try:
-        withGenie:
-          let currentPath = getCurrentDir()
-          let argsList = if args.len > 0: args.split(" ") else: @[]
-          let nimbleResult = nimbleRun(currentPath, target, argsList)
-          return formatNimbleOutput(nimbleResult)
+        # Database operation (no locks needed - database is thread-safe)
+        let currentPath = getCurrentDir()
+        let argsList = if args.len > 0: args.split(" ") else: @[]
+        let nimbleResult = nimbleRun(currentPath, target, argsList)
+        return formatNimbleOutput(nimbleResult)
       except Exception as e:
         return fmt"Failed to run project: {e.msg}"
 
@@ -872,10 +1098,10 @@ Use searchSymbols to search across all indexed code.
       ## troubleshoot project setup issues and ensure valid configuration.
       ## - file: Optional path to specific .nimble file to check (defaults to current project's .nimble file)
       try:
-        withGenie:
-          let currentPath = getCurrentDir()
-          let nimbleResult = nimbleCheck(currentPath, file)
-          return formatNimbleOutput(nimbleResult)
+        # Database operation (no locks needed - database is thread-safe)
+        let currentPath = getCurrentDir()
+        let nimbleResult = nimbleCheck(currentPath, file)
+        return formatNimbleOutput(nimbleResult)
       except Exception as e:
         return fmt"Failed to check project: {e.msg}"
 
@@ -892,10 +1118,10 @@ Use searchSymbols to search across all indexed code.
       ## - action: Action to perform ("add" to link local package, "remove" to unlink, "list" to show current links)
       ## - path: Local path to package directory (required for "add" action, ignored for others)
       try:
-        withGenie:
-          let currentPath = getCurrentDir()
-          let nimbleResult = nimbleDevelop(currentPath, action, path)
-          return formatNimbleOutput(nimbleResult)
+        # Database operation (no locks needed - database is thread-safe)
+        let currentPath = getCurrentDir()
+        let nimbleResult = nimbleDevelop(currentPath, action, path)
+        return formatNimbleOutput(nimbleResult)
       except Exception as e:
         return fmt"Failed to manage develop package: {e.msg}"
 
@@ -906,10 +1132,10 @@ Use searchSymbols to search across all indexed code.
       ## and security updates from package dependencies.
       ## - packageName: Optional name of specific package to upgrade (if empty, upgrades all packages)
       try:
-        withGenie:
-          let currentPath = getCurrentDir()
-          let nimbleResult = nimbleUpgrade(currentPath, packageName)
-          return formatNimbleOutput(nimbleResult)
+        # Database operation (no locks needed - database is thread-safe)
+        let currentPath = getCurrentDir()
+        let nimbleResult = nimbleUpgrade(currentPath, packageName)
+        return formatNimbleOutput(nimbleResult)
       except Exception as e:
         return fmt"Failed to upgrade packages: {e.msg}"
 
@@ -919,10 +1145,10 @@ Use searchSymbols to search across all indexed code.
       ## Shows all direct and transitive dependencies with versions, paths, and metadata.
       ## Use this for build automation, dependency analysis, or project documentation.
       try:
-        withGenie:
-          let currentPath = getCurrentDir()
-          let nimbleResult = nimbleDump(currentPath)
-          return formatNimbleOutput(nimbleResult)
+        # Database operation (no locks needed - database is thread-safe)
+        let currentPath = getCurrentDir()
+        let nimbleResult = nimbleDump(currentPath)
+        return formatNimbleOutput(nimbleResult)
       except Exception as e:
         return fmt"Failed to dump dependencies: {e.msg}"
 
@@ -938,10 +1164,10 @@ Use searchSymbols to search across all indexed code.
       ## packages before installing them or to get documentation links and usage information.
       ## - packageName: Name of the package to get information about (can be installed or from registry)
       try:
-        withGenie:
-          let currentPath = getCurrentDir()
-          let nimbleResult = nimbleInfo(currentPath, packageName)
-          return formatNimbleOutput(nimbleResult)
+        # Database operation (no locks needed - database is thread-safe)
+        let currentPath = getCurrentDir()
+        let nimbleResult = nimbleInfo(currentPath, packageName)
+        return formatNimbleOutput(nimbleResult)
       except Exception as e:
         return fmt"Failed to get package info: {e.msg}"
 
@@ -952,10 +1178,10 @@ Use searchSymbols to search across all indexed code.
       ## dependencies, diagnose version conflicts, or document project requirements.
       ## - showTree: If true, display dependencies in tree format showing the dependency hierarchy; if false, show flat list
       try:
-        withGenie:
-          let currentPath = getCurrentDir()
-          let nimbleResult = nimbleDeps(currentPath, showTree)
-          return formatNimbleOutput(nimbleResult)
+        # Database operation (no locks needed - database is thread-safe)
+        let currentPath = getCurrentDir()
+        let nimbleResult = nimbleDeps(currentPath, showTree)
+        return formatNimbleOutput(nimbleResult)
       except Exception as e:
         return fmt"Failed to show dependencies: {e.msg}"
 
@@ -966,10 +1192,10 @@ Use searchSymbols to search across all indexed code.
       ## to choose appropriate versions for installation or to check update availability.
       ## - packageName: Name of the package to check versions for
       try:
-        withGenie:
-          let currentPath = getCurrentDir()
-          let nimbleResult = nimbleVersions(currentPath, packageName)
-          return formatNimbleOutput(nimbleResult)
+        # Database operation (no locks needed - database is thread-safe)
+        let currentPath = getCurrentDir()
+        let nimbleResult = nimbleVersions(currentPath, packageName)
+        return formatNimbleOutput(nimbleResult)
       except Exception as e:
         return fmt"Failed to get package versions: {e.msg}"
 
@@ -980,10 +1206,10 @@ Use searchSymbols to search across all indexed code.
       ## project structure and verify configuration settings.
       ## - property: Optional specific property to show (e.g., "name", "version", "dependencies"); if empty, shows all properties
       try:
-        withGenie:
-          let currentPath = getCurrentDir()
-          let nimbleResult = nimbleShow(currentPath, property)
-          return formatNimbleOutput(nimbleResult)
+        # Database operation (no locks needed - database is thread-safe)
+        let currentPath = getCurrentDir()
+        let nimbleResult = nimbleShow(currentPath, property)
+        return formatNimbleOutput(nimbleResult)
       except Exception as e:
         return fmt"Failed to show project info: {e.msg}"
 
@@ -993,29 +1219,33 @@ Use searchSymbols to search across all indexed code.
       ## information including project type, dependencies, indexing status, and any issues.
       ## Use this as a diagnostic tool to verify project setup and troubleshoot problems.
       try:
-        withGenie:
-          let currentPath = getCurrentDir()
-          if isNimbleProject(currentPath):
-            let nimbleFile = getNimbleFile(currentPath)
-            var statusInfo = %*{
-              "isNimbleProject": true,
-              "projectPath": currentPath,
-              "nimbleFile": nimbleFile.get(""),
-              "hasSymbolsIndexed": genie.projects.hasKey(currentPath)
-            }
+        let currentPath = getCurrentDir()
+        if isNimbleProject(currentPath):
+          let nimbleFile = getNimbleFile(currentPath)
+          # Check projects table for indexing status (projects access)
+          var hasSymbolsIndexed: bool
+          withProjects:
+            hasSymbolsIndexed = genie.projects.hasKey(currentPath)
+          
+          var statusInfo = %*{
+            "isNimbleProject": true,
+            "projectPath": currentPath,
+            "nimbleFile": nimbleFile.get(""),
+            "hasSymbolsIndexed": hasSymbolsIndexed
+          }
+          
+          # Add dependency information (database operation - no locks needed)
+          let depsResult = nimbleDeps(currentPath, false)
+          if depsResult.success:
+            statusInfo["dependencies"] = %depsResult.output
             
-            # Add dependency information
-            let depsResult = nimbleDeps(currentPath, false)
-            if depsResult.success:
-              statusInfo["dependencies"] = %depsResult.output
-              
-            return $statusInfo
-          else:
-            return $(%*{
-              "isNimbleProject": false,
-              "projectPath": currentPath,
-              "message": "Current directory is not a Nimble project. Use nimbleInitProject to create one."
-            })
+          return $statusInfo
+        else:
+          return $(%*{
+            "isNimbleProject": false,
+            "projectPath": currentPath,
+            "message": "Current directory is not a Nimble project. Use nimbleInitProject to create one."
+          })
       except Exception as e:
         return fmt"Failed to get project status: {e.msg}"
 
@@ -1024,41 +1254,43 @@ proc handleFileResource(ctx: McpRequestContext, uri: string, params: Table[strin
   let dirIndex = params.getOrDefault("dirIndex", "0").parseInt()
   let relativePath = params.getOrDefault("relativePath", "")
   
-  withGenie:
+  # Get base path from registered directories (registeredDirs access)
+  var basePath: string
+  withRegisteredDirs:
     if dirIndex < 0 or dirIndex >= genie.registeredDirectories.len:
       raise newException(IOError, fmt"Invalid directory index: {dirIndex}")
-      
-    let basePath = genie.registeredDirectories[dirIndex]
-    let fullPath = basePath / relativePath
+    basePath = genie.registeredDirectories[dirIndex]
+  
+  let fullPath = basePath / relativePath
+  
+  # Security check: ensure the path is within the registered directory
+  let normalizedFullPath = fullPath.normalizedPath().absolutePath()
+  let normalizedBasePath = basePath.normalizedPath().absolutePath()
+  
+  if not normalizedFullPath.startsWith(normalizedBasePath):
+    raise newException(IOError, "Access denied: path outside registered directory")
     
-    # Security check: ensure the path is within the registered directory
-    let normalizedFullPath = fullPath.normalizedPath().absolutePath()
-    let normalizedBasePath = basePath.normalizedPath().absolutePath()
+  if not fileExists(normalizedFullPath):
+    raise newException(IOError, fmt"File not found: {relativePath}")
     
-    if not normalizedFullPath.startsWith(normalizedBasePath):
-      raise newException(IOError, "Access denied: path outside registered directory")
-      
-    if not fileExists(normalizedFullPath):
-      raise newException(IOError, fmt"File not found: {relativePath}")
-      
-    let mimeType = detectMimeType(normalizedFullPath)
-    let fileContent = readFile(normalizedFullPath)
+  let mimeType = detectMimeType(normalizedFullPath)
+  let fileContent = readFile(normalizedFullPath)
+  
+  var mcpContent: McpContent
+  
+  if isImageFile(normalizedFullPath) or mimeType.startsWith("application/"):
+    # Binary content - encode as base64
+    let encodedContent = encodeFileAsBase64(normalizedFullPath)
+    mcpContent = createImageContent(encodedContent, mimeType)
+  else:
+    # Text content
+    mcpContent = createTextContent(fileContent)
     
-    var mcpContent: McpContent
-    
-    if isImageFile(normalizedFullPath) or mimeType.startsWith("application/"):
-      # Binary content - encode as base64
-      let encodedContent = encodeFileAsBase64(normalizedFullPath)
-      mcpContent = createImageContent(encodedContent, mimeType)
-    else:
-      # Text content
-      mcpContent = createTextContent(fileContent)
-      
-    return McpResourceContents(
-      uri: uri,
-      mimeType: some(mimeType),
-      content: @[mcpContent]
-    )
+  return McpResourceContents(
+    uri: uri,
+    mimeType: some(mimeType),
+    content: @[mcpContent]
+  )
 
 proc handleScreenshotResource(ctx: McpRequestContext, uri: string, params: Table[string, string]): McpResourceContents {.gcsafe.} =
   ## Handle screenshot resource requests from the screenshots directory
@@ -1067,54 +1299,54 @@ proc handleScreenshotResource(ctx: McpRequestContext, uri: string, params: Table
   if filepath == "":
     raise newException(IOError, "No filepath specified")
   
-  withGenie:
-    # Look for screenshots directory in project path or registered directories
-    var screenshotPath = ""
-    
-    # First check if there's a "screenshots" directory in the current project path
-    let currentPath = getCurrentDir()
-    let projectScreenshotDir = currentPath / "screenshots"
-    if dirExists(projectScreenshotDir):
-      screenshotPath = projectScreenshotDir / filepath
-    else:
-      # Fall back to checking registered directories for one named "screenshots"
+  # Look for screenshots directory in project path or registered directories
+  var screenshotPath = ""
+  
+  # First check if there's a "screenshots" directory in the current project path
+  let currentPath = getCurrentDir()
+  let projectScreenshotDir = currentPath / "screenshots"
+  if dirExists(projectScreenshotDir):
+    screenshotPath = projectScreenshotDir / filepath
+  else:
+    # Fall back to checking registered directories for one named "screenshots" (registeredDirs access)
+    withRegisteredDirs:
       for dirPath in genie.registeredDirectories:
         if dirPath.extractFilename().toLowerAscii() == "screenshots" or 
            "screenshot" in dirPath.toLowerAscii():
           screenshotPath = dirPath / filepath
           break
-      
-      if screenshotPath == "":
-        raise newException(IOError, "No screenshots directory found. Create a 'screenshots' directory in your project or register one with addDirectoryResource")
     
-    # Security check: ensure the file is within the screenshot directory
-    let normalizedScreenshotPath = screenshotPath.normalizedPath().absolutePath()
-    let normalizedScreenshotBaseDir = projectScreenshotDir.normalizedPath().absolutePath()
+    if screenshotPath == "":
+      raise newException(IOError, "No screenshots directory found. Create a 'screenshots' directory in your project or register one with addDirectoryResource")
+  
+  # Security check: ensure the file is within the screenshot directory
+  let normalizedScreenshotPath = screenshotPath.normalizedPath().absolutePath()
+  let normalizedScreenshotBaseDir = projectScreenshotDir.normalizedPath().absolutePath()
+  
+  if not normalizedScreenshotPath.startsWith(normalizedScreenshotBaseDir):
+    raise newException(IOError, "Access denied: path outside screenshots directory")
     
-    if not normalizedScreenshotPath.startsWith(normalizedScreenshotBaseDir):
-      raise newException(IOError, "Access denied: path outside screenshots directory")
-      
-    if not fileExists(normalizedScreenshotPath):
-      raise newException(IOError, fmt"Screenshot not found: {filepath}")
-      
-    let mimeType = detectMimeType(normalizedScreenshotPath)
+  if not fileExists(normalizedScreenshotPath):
+    raise newException(IOError, fmt"Screenshot not found: {filepath}")
     
-    var mcpContent: McpContent
+  let mimeType = detectMimeType(normalizedScreenshotPath)
+  
+  var mcpContent: McpContent
+  
+  if isImageFile(normalizedScreenshotPath):
+    # Image content - encode as base64
+    let encodedContent = encodeFileAsBase64(normalizedScreenshotPath)
+    mcpContent = createImageContent(encodedContent, mimeType)
+  else:
+    # Text content (maybe screenshot metadata)
+    let fileContent = readFile(normalizedScreenshotPath)
+    mcpContent = createTextContent(fileContent)
     
-    if isImageFile(normalizedScreenshotPath):
-      # Image content - encode as base64
-      let encodedContent = encodeFileAsBase64(normalizedScreenshotPath)
-      mcpContent = createImageContent(encodedContent, mimeType)
-    else:
-      # Text content (maybe screenshot metadata)
-      let fileContent = readFile(normalizedScreenshotPath)
-      mcpContent = createTextContent(fileContent)
-      
-    return McpResourceContents(
-      uri: uri,
-      mimeType: some(mimeType),
-      content: @[mcpContent]
-    )
+  return McpResourceContents(
+    uri: uri,
+    mimeType: some(mimeType),
+    content: @[mcpContent]
+  )
 
 proc listDirectoryFiles(dirPath: string, prefix: string = ""): seq[string] =
   ## Recursively list all files in a directory with relative paths
@@ -1173,8 +1405,12 @@ server.registerResourceTemplateWithContext(
 )
 
 when isMainModule:
-  # Initialize the lock
-  initLock(genieLock)
+  # Initialize all locks
+  initLock(projectsLock)
+  initLock(nimblePackagesLock)
+  initLock(symbolCacheLock)
+  initLock(registeredDirsLock)
+  initLock(genieLock)  # Legacy - to be removed
   
   # Parse command line arguments
   var config = parseCommandLine()

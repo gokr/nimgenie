@@ -11,10 +11,9 @@ suite "Nimble Package Discovery Tests":
   var testDb: Database
   
   setup:
-    requireTiDB:
-      testTempDir = getTempDir() / "nimgenie_nimble_test_" & $getTime().toUnix()
-      createDir(testTempDir)
-      testDb = createTestDatabase()
+    testTempDir = getTempDir() / "nimgenie_nimble_test_" & $getTime().toUnix()
+    createDir(testTempDir)
+    testDb = createTestDatabase()
     
   teardown:
     cleanupTestDatabase(testDb)
@@ -22,29 +21,27 @@ suite "Nimble Package Discovery Tests":
       removeDir(testTempDir)
 
   test "Detect Nimble project from nimble file":
-    requireTiDB:
-      let projectPath = createTestProject(testTempDir, "nimble_detection_test")
-      
-      # Should detect as Nimble project
-      check isNimbleProject(projectPath) == true
-      
-      # Get nimble file path
-      let nimbleFile = getNimbleFile(projectPath)
-      check nimbleFile.isSome()
-      check nimbleFile.get().endsWith(".nimble")
-      check fileExists(nimbleFile.get())
-      
-      # Non-Nimble directory should not be detected
-      let nonNimbleDir = testTempDir / "not_nimble"
-      createDir(nonNimbleDir)
-      check isNimbleProject(nonNimbleDir) == false
+    let projectPath = createTestProject(testTempDir, "nimble_detection_test")
+    
+    # Should detect as Nimble project
+    check isNimbleProject(projectPath) == true
+    
+    # Get nimble file path
+    let nimbleFile = getNimbleFile(projectPath)
+    check nimbleFile.isSome()
+    check nimbleFile.get().endsWith(".nimble")
+    check fileExists(nimbleFile.get())
+    
+    # Non-Nimble directory should not be detected
+    let nonNimbleDir = testTempDir / "not_nimble"
+    createDir(nonNimbleDir)
+    check isNimbleProject(nonNimbleDir) == false
 
   test "Parse nimble file contents":
-    requireTiDB:
-      let projectPath = createTestProject(testTempDir, "nimble_parse_test")
-      
-      # Create a more complex nimble file
-      let nimbleContent = """
+    let projectPath = createTestProject(testTempDir, "nimble_parse_test")
+    
+    # Create a more complex nimble file
+    let nimbleContent = """
 # Package
 version       = "1.2.3"
 author        = "Test Author <test@example.com>"
@@ -63,34 +60,33 @@ requires "strutils"
 
 # Tasks
 task test, "Run tests":
-  exec "nim c -r tests/test_all.nim"
+exec "nim c -r tests/test_all.nim"
 
 task docs, "Generate documentation":
-  exec "nim doc src/nimble_parse_test.nim"
+exec "nim doc src/nimble_parse_test.nim"
 """
-      
-      let nimbleFile = projectPath / "nimble_parse_test.nimble"
-      writeFile(nimbleFile, nimbleContent)
-      
-      # Parse nimble file information
-      let nimbleInfo = parseNimbleFile(nimbleFile)
-      
-      check nimbleInfo.hasKey("version")
-      check nimbleInfo.hasKey("author")
-      check nimbleInfo.hasKey("description")
-      check nimbleInfo.hasKey("license")
-      
-      check nimbleInfo["version"].getStr() == "1.2.3"
-      check nimbleInfo["author"].getStr().contains("Test Author")
-      check nimbleInfo["license"].getStr() == "MIT"
+    
+    let nimbleFile = projectPath / "nimble_parse_test.nimble"
+    writeFile(nimbleFile, nimbleContent)
+    
+    # Parse nimble file information
+    let nimbleInfo = parseNimbleFile(nimbleFile)
+    
+    check nimbleInfo.hasKey("version")
+    check nimbleInfo.hasKey("author")
+    check nimbleInfo.hasKey("description")
+    check nimbleInfo.hasKey("license")
+    
+    check nimbleInfo["version"].getStr() == "1.2.3"
+    check nimbleInfo["author"].getStr().contains("Test Author")
+    check nimbleInfo["license"].getStr() == "MIT"
 
   test "List Nimble dependencies":
-    requireTiDB:
-      let projectPath = createTestProject(testTempDir, "nimble_deps_test")
-      
-      # Modify nimble file to have specific dependencies
-      let nimbleFile = projectPath / "nimble_deps_test.nimble"
-      let nimbleContent = """
+    let projectPath = createTestProject(testTempDir, "nimble_deps_test")
+    
+    # Modify nimble file to have specific dependencies
+    let nimbleFile = projectPath / "nimble_deps_test.nimble"
+    let nimbleContent = """
 version = "0.1.0"
 author = "Test"
 description = "Test dependencies"
@@ -101,16 +97,16 @@ requires "json >= 1.0.0"
 requires "asyncdispatch"
 requires "httpclient >= 0.20.0"
 """
-      writeFile(nimbleFile, nimbleContent)
-      
-      # Get dependencies
-      let depsResult = nimbleDeps(projectPath, false)
-      
-      if depsResult.success:
-        check depsResult.output.len > 0
-        # Dependencies should include nim, json, asyncdispatch, httpclient
-        let depsText = depsResult.output.toLowerAscii()
-        check "json" in depsText or "nim" in depsText
+    writeFile(nimbleFile, nimbleContent)
+    
+    # Get dependencies
+    let depsResult = nimbleDeps(projectPath, false)
+    
+    if depsResult.success:
+      check depsResult.output.len > 0
+      # Dependencies should include nim, json, asyncdispatch, httpclient
+      let depsText = depsResult.output.toLowerAscii()
+      check "json" in depsText or "nim" in depsText
 
 suite "Nimble Command Integration Tests":
 
@@ -208,10 +204,9 @@ suite "Local Package Discovery Tests":
   var testDb: Database
   
   setup:
-    requireTiDB:
-      testTempDir = getTempDir() / "nimgenie_local_packages_test_" & $getTime().toUnix()
-      createDir(testTempDir)
-      testDb = createTestDatabase()
+    testTempDir = getTempDir() / "nimgenie_local_packages_test_" & $getTime().toUnix()
+    createDir(testTempDir)
+    testDb = createTestDatabase()
     
   teardown:
     cleanupTestDatabase(testDb)

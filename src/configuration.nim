@@ -13,3 +13,10 @@ type Config* = object
   databasePassword*: string
   databasePoolSize*: int
   noDiscovery*: bool
+  # Embedding configuration
+  ollamaHost*: string
+  embeddingModel*: string
+  embeddingBatchSize*: int
+  vectorSimilarityThreshold*: float
+  # Dependency tracking configuration
+  enableDependencyTracking*: bool  # Enable dependency-based incremental indexing

@@ -1,18 +1,24 @@
-import std/[json, os, strutils, strformat]
+import std/[json, os, strutils, strformat, times, options]
 import database
 import analyzer
+import embedding
+import configuration
 
 type
   Indexer* = object
     database*: Database
     analyzer*: Analyzer
     projectPath*: string
+    embeddingGenerator*: EmbeddingGenerator
+    config*: Config
 
-proc newIndexer*(database: Database, projectPath: string): Indexer =
+proc newIndexer*(database: Database, projectPath: string, config: Config): Indexer =
   ## Create a new indexer for the given project
   result.database = database
   result.projectPath = projectPath
   result.analyzer = newAnalyzer(projectPath)
+  result.config = config
+  result.embeddingGenerator = newEmbeddingGenerator(config)
 
 proc findNimFiles*(indexer: Indexer, directory: string = ""): seq[string] =
   ## Find all .nim files in the project directory
@@ -79,6 +85,30 @@ proc parseNimDocJson*(indexer: Indexer, jsonOutput: string): int =
       if not isAbsolute(filePath):
         filePath = indexer.projectPath / filePath
       
+      # Generate embeddings for the symbol if embedding generator is available
+      var docEmb, sigEmb, nameEmb, combinedEmb = ""
+      var embeddingModel, embeddingVersion = ""
+      
+      if indexer.embeddingGenerator.available:
+        # Generate embeddings
+        let docEmbResult = indexer.embeddingGenerator.generateDocumentationEmbedding(documentation)
+        let sigEmbResult = indexer.embeddingGenerator.generateSignatureEmbedding(signature)
+        let nameEmbResult = indexer.embeddingGenerator.generateNameEmbedding(name, moduleName)
+        let combinedEmbResult = indexer.embeddingGenerator.generateCombinedEmbedding(name, signature, documentation)
+        
+        # Store embeddings if successful - convert to TiDB vector format
+        if docEmbResult.success:
+          docEmb = vectorToTiDBString(docEmbResult.embedding)
+        if sigEmbResult.success:
+          sigEmb = vectorToTiDBString(sigEmbResult.embedding)
+        if nameEmbResult.success:
+          nameEmb = vectorToTiDBString(nameEmbResult.embedding)
+        if combinedEmbResult.success:
+          combinedEmb = vectorToTiDBString(combinedEmbResult.embedding)
+          
+        embeddingModel = indexer.config.embeddingModel
+        embeddingVersion = "1.0"
+      
       let symbolId = indexer.database.insertSymbol(
         name = name,
         symbolType = symbolType,
@@ -88,7 +118,13 @@ proc parseNimDocJson*(indexer: Indexer, jsonOutput: string): int =
         col = column,
         signature = signature,
         documentation = documentation,
-        visibility = "" # Will be determined later if needed
+        visibility = "", # Will be determined later if needed
+        documentationEmbedding = docEmb,
+        signatureEmbedding = sigEmb,
+        nameEmbedding = nameEmb,
+        combinedEmbedding = combinedEmb,
+        embeddingModel = embeddingModel,
+        embeddingVersion = embeddingVersion
       )
       
       if symbolId > 0:
@@ -156,14 +192,16 @@ proc parseNimIdxFile*(indexer: Indexer, idxFilePath: string): int =
 proc indexSingleFile*(indexer: Indexer, filePath: string): tuple[success: bool, symbolCount: int] =
   ## Index a single Nim file using nim jsondoc
   try:
-    echo fmt"Indexing file: {filePath}"
+    when not defined(testing):
+      echo fmt"Indexing file: {filePath}"
     
     # Generate JSON documentation for the file using clean output
     let absolutePath = if isAbsolute(filePath): filePath else: indexer.projectPath / filePath
     let cmdResult = indexer.analyzer.extractJsonDoc(absolutePath)
     
     if cmdResult.exitCode != 0:
-      echo fmt"Failed to generate jsondoc for {filePath}: {cmdResult.output}"
+      when not defined(testing):
+        echo fmt"Failed to generate jsondoc for {filePath}: {cmdResult.output}"
       return (success: false, symbolCount: 0)
     
     # Parse and store the symbols from clean JSON output
@@ -181,17 +219,73 @@ proc indexSingleFile*(indexer: Indexer, filePath: string): tuple[success: bool, 
     echo fmt"Error indexing file {filePath}: {e.msg}"
     return (success: false, symbolCount: 0)
 
-proc indexProject*(indexer: Indexer): string =
-  ## Index the entire project
+
+proc parseAndStoreDependencies*(indexer: Indexer): bool =
+  ## Parse the dependency output from nim genDepend and store in database
   try:
-    echo fmt"Starting project indexing for: {indexer.projectPath}"
+    let depResult = indexer.analyzer.getDependencies()
+    
+    if depResult["status"].getStr() != "success":
+      echo "Failed to get dependencies: ", depResult["message"].getStr()
+      return false
+    
+    let depOutput = depResult["dependencies"].getStr()
+    let lines = depOutput.splitLines()
+    
+    # Clear existing dependencies for this project
+    indexer.database.clearFileDependencies()
+    
+    for line in lines:
+      let trimmed = line.strip()
+      if trimmed == "" or trimmed.startsWith("digraph") or trimmed == "}" or trimmed == "{":
+        continue
+      
+      # Parse DOT format line: "source" -> "target";
+      if "->" in trimmed:
+        let parts = trimmed.split("->")
+        if parts.len != 2:
+          continue
+        
+        # Extract quoted module names
+        var sourceFile = parts[0].strip()
+        var targetFile = parts[1].strip()
+        
+        # Remove quotes and semicolon
+        if sourceFile.startsWith("\"") and sourceFile.endsWith("\""):
+          sourceFile = sourceFile[1..^2]
+        if targetFile.endsWith("\";"):
+          targetFile = targetFile[0..^3]
+        if targetFile.startsWith("\"") and targetFile.endsWith("\""):
+          targetFile = targetFile[1..^2]
+        
+        # Make paths absolute
+        let absSource = if isAbsolute(sourceFile): sourceFile else: indexer.projectPath / sourceFile
+        let absTarget = if isAbsolute(targetFile): targetFile else: indexer.projectPath / targetFile
+        
+        # Insert the dependency
+        if not indexer.database.insertFileDependency(absSource, absTarget):
+          echo fmt"Failed to store dependency: {absSource} -> {absTarget}"
+          return false
+    
+    echo fmt"Successfully stored {lines.len} dependencies"
+    return true
+  except Exception as e:
+    echo "Error parsing and storing dependencies: ", e.msg
+    return false
+
+proc indexProject*(indexer: Indexer): string =
+  ## Index the entire project using dependency analysis
+  try:
+    when not defined(testing):
+      echo fmt"Starting project indexing for: {indexer.projectPath}"
     
     # Clear existing symbols for this project
     indexer.database.clearSymbols()
     
     # Find all Nim files
     let nimFiles = indexer.findNimFiles()
-    echo fmt"Found {nimFiles.len} Nim files"
+    when not defined(testing):
+      echo fmt"Found {nimFiles.len} Nim files"
     
     if nimFiles.len == 0:
       return "No Nim files found in project"
@@ -200,23 +294,41 @@ proc indexProject*(indexer: Indexer): string =
     var successCount = 0
     var failureCount = 0
     
-    # Index each file
+    # First, parse and store dependencies if enabled in configuration
+    if indexer.config.enableDependencyTracking:
+      if not parseAndStoreDependencies(indexer):
+        echo "Warning: Failed to store dependencies"
+    
+    # Index each file and track modifications
     for filePath in nimFiles:
+      # Get file modification info
+      let fileInfo = getFileSize(filePath)
+      let modTime = getLastModificationTime(filePath).utc
+      let fileHash = "" # In a real implementation, we'd calculate a hash of the file content
+      
+      # Store file modification info
+      if not indexer.database.insertFileModification(filePath, modTime, int(fileInfo), fileHash):
+        echo fmt"Warning: Failed to store modification info for {filePath}"
+      
       let (success, symbolCount) = indexer.indexSingleFile(filePath)
       if success:
         inc successCount
         totalSymbols += symbolCount
-        echo fmt"✓ {extractFilename(filePath)}: {symbolCount} symbols"
+        when not defined(testing):
+          echo fmt"✓ {extractFilename(filePath)}: {symbolCount} symbols"
       else:
         inc failureCount
-        echo fmt"✗ Failed to index {extractFilename(filePath)}"
+        when not defined(testing):
+          echo fmt"✗ Failed to index {extractFilename(filePath)}"
     
     # Try project-wide indexing as well
-    echo "Attempting project-wide indexing..."
+    when not defined(testing):
+      echo "Attempting project-wide indexing..."
     let projectResult = indexer.analyzer.execNimCommand("doc", @["--index:on", "--project", indexer.projectPath.absolutePath])
     
     if projectResult.exitCode == 0:
-      echo "✓ Project-wide indexing completed"
+      when not defined(testing):
+        echo "✓ Project-wide indexing completed"
       
       # Look for generated .idx files
       for kind, path in walkDir(indexer.projectPath):
@@ -243,23 +355,96 @@ Project indexing completed:
     echo errorMsg
     return errorMsg
 
+proc getFilesToReindex*(indexer: Indexer, changedFiles: seq[string]): seq[string] =
+  ## Determine which files need to be re-indexed based on changed files and dependencies
+  var filesToReindex: seq[string] = @[]
+  
+  # Add the changed files themselves
+  for file in changedFiles:
+    if file notin filesToReindex:
+      filesToReindex.add(file)
+  
+  # Find all files that depend on the changed files (reverse dependencies)
+  for changedFile in changedFiles:
+    let dependencies = indexer.database.getFileDependencies(targetFile = changedFile)
+    for dep in dependencies:
+      let sourceFile = dep.sourceFile
+      if sourceFile notin filesToReindex:
+        filesToReindex.add(sourceFile)
+  
+  return filesToReindex
+
 proc updateIndex*(indexer: Indexer, filePaths: seq[string] = @[]): string =
   ## Update index for specific files or detect changes automatically
   try:
-    let filesToUpdate = if filePaths.len > 0: filePaths else: indexer.findNimFiles()
+    var filesToUpdate: seq[string]
+    
+    if filePaths.len > 0:
+      # Specific files were requested
+      filesToUpdate = filePaths
+    else:
+      # Detect changes automatically
+      if indexer.config.enableDependencyTracking:
+        var changedFiles: seq[string] = @[]
+        
+        # Check all Nim files
+        let nimFiles = indexer.findNimFiles()
+        for filePath in nimFiles:
+          let fileInfo = getFileSize(filePath)
+          let modTime = getLastModificationTime(filePath)
+          
+          # Get stored modification info
+          let storedModOpt = indexer.database.getFileModification(filePath)
+          
+          if storedModOpt.isSome():
+            let storedMod = storedModOpt.get()
+            # If file has been modified or doesn't have embeddings, mark for update
+            if modTime.utc > storedMod.modificationTime:
+              changedFiles.add(filePath)
+          else:
+            # New file
+            changedFiles.add(filePath)
+        
+        # Determine which files need to be re-indexed based on dependencies
+        filesToUpdate = indexer.getFilesToReindex(changedFiles)
+        
+        # If no dependencies are available but we have changed files, just update changed files
+        if filesToUpdate.len == 0 and changedFiles.len > 0:
+          filesToUpdate = changedFiles
+      else:
+        # If dependency tracking is disabled, re-index all files
+        filesToUpdate = indexer.findNimFiles()
     
     var updatedCount = 0
     var totalSymbols = 0
     
     for filePath in filesToUpdate:
-      # Check if file was modified since last index
-      # For now, we'll just re-index all requested files
+      # Get file modification info
+      let fileInfo = getFileSize(filePath)
+      let modTime = getLastModificationTime(filePath)
+      let fileHash = "" # In a real implementation, we'd calculate a hash of the file content
+      
+      # Store file modification info
+      if not indexer.database.insertFileModification(filePath, modTime.utc, int(fileInfo), fileHash):
+        echo fmt"Warning: Failed to store modification info for {filePath}"
+      
       let (success, symbolCount) = indexer.indexSingleFile(filePath)
       if success:
         inc updatedCount
         totalSymbols += symbolCount
+        echo fmt"✓ {extractFilename(filePath)}: {symbolCount} symbols"
+      else:
+        echo fmt"✗ Failed to index {extractFilename(filePath)}"
     
-    return fmt"Updated {updatedCount} files with {totalSymbols} symbols"
+    let summary = fmt"""
+Index update completed:
+- Files to update: {filesToUpdate.len}
+- Files processed: {updatedCount}
+- Total symbols indexed: {totalSymbols}
+"""
+    
+    echo summary
+    return summary
     
   except Exception as e:
     return fmt"Index update failed: {e.msg}"

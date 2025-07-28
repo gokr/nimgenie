@@ -32,14 +32,14 @@ proc start*(server: var TestServer): bool =
   putEnv("TIDB_DATABASE", dbName)
   putEnv("TIDB_POOL_SIZE", "5")
   
-  echo "Environment variables set:"
-  echo "  TIDB_HOST=127.0.0.1"
-  echo "  TIDB_PORT=4000"
-  echo "  TIDB_USER=root"
-  echo fmt"  TIDB_DATABASE={dbName}"
+  # echo "Environment variables set:"
+  # echo "  TIDB_HOST=127.0.0.1"
+  # echo "  TIDB_PORT=4000"
+  # echo "  TIDB_USER=root"
+  # echo fmt"  TIDB_DATABASE={dbName}"
   
   # Create the database first using mysql command
-  echo fmt"Creating database {dbName}..."
+  # echo fmt"Creating database {dbName}..."
   let createDbResult = execCmd(fmt"mysql -h127.0.0.1 -P4000 -uroot -e 'CREATE DATABASE IF NOT EXISTS `{dbName}`;'")
   if createDbResult != 0:
     echo "Failed to create test database, trying to continue anyway..."

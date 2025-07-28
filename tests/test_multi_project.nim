@@ -15,8 +15,7 @@ suite "Multi-Project Architecture Tests":
   var project3Path: string
   
   setup:
-    requireTiDB:
-      testTempDir = getTempDir() / "nimgenie_multiproject_test_" & $getTime().toUnix()
+    testTempDir = getTempDir() / "nimgenie_multiproject_test_" & $getTime().toUnix()
       createDir(testTempDir)
       
       # Create multiple test projects
@@ -58,23 +57,20 @@ type Project3Type* = object
       removeDir(testTempDir)
 
   test "Add multiple projects to NimGenie":
-    requireTiDB:
-      # This test would require implementing addProject method
+    # This test would require implementing addProject method
       # For now, we'll test the data structure setup
       check testGenie.projects.len >= 0
       # Database object existence check (no nil comparison for value types)
 
   test "Test NimGenie structure and data tables":
-    requireTiDB:
-      # Test that we can initialize the data structures
+    # Test that we can initialize the data structures
       check testGenie.projects.len == 0
       check testGenie.nimblePackages.len == 0
       check testGenie.symbolCache.len == 0
       check testGenie.registeredDirectories.len == 0
 
   test "Test directory resource management":
-    requireTiDB:
-      # Test using the implemented directory resource functionality
+    # Test using the implemented directory resource functionality
       let result = testGenie.addDirectoryToResources(project1Path, "Project 1", "Test project 1")
       check result == true
       
@@ -82,8 +78,7 @@ type Project3Type* = object
       check project1Path.normalizedPath().absolutePath() in testGenie.registeredDirectories
 
   test "Test Nimble package discovery":
-    requireTiDB:
-      # Test Nimble package data structure
+    # Test Nimble package data structure
       check testGenie.nimblePackages.len == 0
       
       # Manually add a test package
@@ -92,8 +87,7 @@ type Project3Type* = object
       check testGenie.nimblePackages.hasKey("test_package")
 
   test "Test symbol cache functionality":
-    requireTiDB:
-      # Test symbol cache data structure
+    # Test symbol cache data structure
       check testGenie.symbolCache.len == 0
       
       # Manually add a test symbol to cache
@@ -108,8 +102,7 @@ suite "NimGenie Integration Tests":
   var testGenie: NimGenie
   
   setup:
-    requireTiDB:
-      testTempDir = getTempDir() / "nimgenie_integration_test_" & $getTime().toUnix()
+    testTempDir = getTempDir() / "nimgenie_integration_test_" & $getTime().toUnix()
       createDir(testTempDir)
       
       testDb = createTestDatabase()
@@ -127,8 +120,7 @@ suite "NimGenie Integration Tests":
       removeDir(testTempDir)
 
   test "Test openGenie functionality":
-    requireTiDB:
-      # Test the main openGenie function
+    # Test the main openGenie function
       let projectPath = createTestProject(testTempDir, "open_test")
       let genie = openGenie(projectPath)
       
@@ -144,8 +136,7 @@ suite "Resource Management Tests":
   var testGenie: NimGenie
   
   setup:
-    requireTiDB:
-      testTempDir = getTempDir() / "nimgenie_resource_test_" & $getTime().toUnix()
+    testTempDir = getTempDir() / "nimgenie_resource_test_" & $getTime().toUnix()
       createDir(testTempDir)
       
       testDb = createTestDatabase()
@@ -163,8 +154,7 @@ suite "Resource Management Tests":
       removeDir(testTempDir)
 
   test "Register multiple directories":
-    requireTiDB:
-      # Create test directories
+    # Create test directories
       let dir1 = testTempDir / "dir1"
       let dir2 = testTempDir / "dir2"
       createDir(dir1)
@@ -181,8 +171,7 @@ suite "Resource Management Tests":
       check testGenie.registeredDirectories.len == 2
 
   test "Remove registered directory":
-    requireTiDB:
-      # Create and register directory
+    # Create and register directory
       let testDir = testTempDir / "remove_me"
       createDir(testDir)
       

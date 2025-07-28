@@ -67,8 +67,8 @@ when isMainModule:
     # Should succeed
     check checkResult["status"].getStr() == "success"
     check checkResult.hasKey("output")
-    if checkResult["status"].getStr() != "success":
-      echo "Syntax check failed: ", checkResult["message"].getStr()
+    # if checkResult["status"].getStr() != "success":
+    #   echo "Syntax check failed: ", checkResult["message"].getStr()
 
   test "Check syntax of invalid Nim file":
     let invalidNimFile = testProjectPath / "src" / "invalid.nim"
@@ -392,7 +392,7 @@ const CONST{i}* = {i}
     let endTime = getTime()
     let duration = endTime - startTime
     
-    echo fmt"Test completed in {duration.inMilliseconds}ms"
+    # echo fmt"Test completed in {duration.inMilliseconds}ms"
     
     # check nimFiles.len >= 10
     # check totalSymbols > 0
@@ -416,7 +416,7 @@ type TestType = object
     let endTime = getTime()
     let duration = endTime - startTime
     
-    echo fmt"Repeated analysis 50 times in {duration.inMilliseconds}ms"
+    # echo fmt"Repeated analysis 50 times in {duration.inMilliseconds}ms"
     
     # Should complete in reasonable time
     check duration.inMilliseconds < 30000  # Less than 30 seconds

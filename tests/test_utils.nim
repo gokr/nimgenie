@@ -46,20 +46,9 @@ proc createTestDatabase*(): Database =
   ## Create a test database instance connected to TiDB
   ## Requires TiDB to be running via `tiup playground`
   ## Reuses the same test database and cleans tables for each test
-  
   let testDbName = "nimgenie_test"
-  
-  # Create the database first by connecting to default database
-  let setupConfig = getTestConfig("test")
-  let setupDb = newDatabase(setupConfig)
-  setupDb.pool.withDb:
-    discard db.query(fmt"CREATE DATABASE IF NOT EXISTS {testDbName}")
-  closeDatabase(setupDb)
-  
-  # Now connect to our test database
   let testConfig = getTestConfig(testDbName)
   result = newDatabase(testConfig)
-  
   # Clean all tables to ensure fresh state
   cleanTestTables(result)
 
@@ -67,26 +56,6 @@ proc cleanupTestDatabase*(db: Database) =
   ## Clean up test database - just close connections since we reuse the database
   # Close the test database connection
   closeDatabase(db)
-
-proc checkTiDBAvailable*(): bool =
-  ## Check if TiDB is available for testing
-  try:
-    let testConfig = getTestConfig("test")
-    let testDb = newDatabase(testConfig)
-    testDb.pool.withDb:
-      discard db.query("SELECT 1")
-    closeDatabase(testDb)
-    return true
-  except Exception as e:
-    echo fmt"Check for Tidb failed: {e.msg}"
-    return false
-
-template requireTiDB*(body: untyped): untyped =
-  ## Template that skips tests if TiDB is not available
-  if not checkTiDBAvailable():
-    skip()
-  else:
-    body
 
 # Common test utility functions
 import base64

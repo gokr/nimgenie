@@ -134,8 +134,7 @@ suite "Screenshot Workflow Integration Tests":
   var screenshotDir: string
   
   setup:
-    requireTiDB:
-      # Create test environment
+    # Create test environment
       testTempDir = getTempDir() / "nimgenie_screenshot_test_" & $getTime().toUnix()
       screenshotDir = testTempDir / "screenshots"
       createDir(testTempDir)
@@ -146,8 +145,7 @@ suite "Screenshot Workflow Integration Tests":
       removeDir(testTempDir)
 
   test "Complete screenshot workflow - create screenshots dir, create file":
-    requireTiDB:
-      # Step 1: Create screenshots directory in project (simulating game setup)
+    # Step 1: Create screenshots directory in project (simulating game setup)
       # This is much simpler than registering - just create the expected directory
       
       # Step 2: Simulate game taking a screenshot  
@@ -165,8 +163,7 @@ suite "Screenshot Workflow Integration Tests":
       check fileContent.startsWith("\x89PNG")  # PNG signature
 
   test "Multiple screenshots workflow":
-    requireTiDB:
-      # Create multiple screenshots
+    # Create multiple screenshots
       let screenshots = ["error_screen.png", "menu_screen.png", "gameplay_001.png"]
       var createdPaths: seq[string] = @[]
       
@@ -185,8 +182,7 @@ suite "Screenshot Workflow Integration Tests":
         check fileContent.startsWith("\x89PNG")
 
   test "Subdirectory screenshots workflow":
-    requireTiDB:
-      # Create subdirectory structure in screenshots
+    # Create subdirectory structure in screenshots
       let subDir = screenshotDir / "level1"
       createDir(subDir)
       
@@ -205,8 +201,7 @@ suite "Screenshot Workflow Integration Tests":
       check fileContent.startsWith("\x89PNG")
 
   test "Mixed file types in screenshots directory":
-    requireTiDB:
-      # Create PNG screenshot
+    # Create PNG screenshot
       let pngPath = createMockScreenshot(screenshotDir, "screen.png")
       echo fmt"PNG screenshot created: screen.png"
       
@@ -244,8 +239,7 @@ suite "Screenshot Workflow Error Handling Tests":
   var screenshotDir: string
   
   setup:
-    requireTiDB:
-      testTempDir = getTempDir() / "nimgenie_screenshot_error_test_" & $getTime().toUnix()
+    testTempDir = getTempDir() / "nimgenie_screenshot_error_test_" & $getTime().toUnix()
       screenshotDir = testTempDir / "screenshots"
       createDir(testTempDir)
       createDir(screenshotDir)
@@ -255,14 +249,12 @@ suite "Screenshot Workflow Error Handling Tests":
       removeDir(testTempDir)
 
   test "Request non-existent screenshot file":
-    requireTiDB:
-      # Test file existence checking
+    # Test file existence checking
       let nonexistentFile = screenshotDir / "nonexistent.png"
       check not fileExists(nonexistentFile)
 
   test "Path traversal security test":
-    requireTiDB:
-      # Create a file outside the screenshots directory
+    # Create a file outside the screenshots directory
       let outsideFile = testTempDir / "outside.txt"
       writeFile(outsideFile, "This file should not be accessible")
       
@@ -275,8 +267,7 @@ suite "Screenshot Workflow Error Handling Tests":
       check not fileExists(maliciousPath.normalizedPath())
 
   test "No screenshots directory exists":
-    requireTiDB:
-      # Remove the screenshots directory to test error handling
+    # Remove the screenshots directory to test error handling
       if dirExists(screenshotDir):
         removeDir(screenshotDir)
       
@@ -294,8 +285,7 @@ suite "Directory Registration and Screenshot Integration Tests":
   var testDb: Database
   
   setup:
-    requireTiDB:
-      testTempDir = getTempDir() / "nimgenie_dir_screenshot_test_" & $getTime().toUnix() 
+    testTempDir = getTempDir() / "nimgenie_dir_screenshot_test_" & $getTime().toUnix()
       screenshotDir = testTempDir / "screenshots"
       createDir(testTempDir)
       createDir(screenshotDir)
@@ -307,8 +297,7 @@ suite "Directory Registration and Screenshot Integration Tests":
       removeDir(testTempDir)
 
   test "Directory registration with screenshot files":
-    requireTiDB:
-      # Create screenshot files
+    # Create screenshot files
       let screenshot1 = createMockScreenshot(screenshotDir, "game_state_001.png")
       let screenshot2 = createMockScreenshot(screenshotDir, "error_screen.png")
       
@@ -339,8 +328,7 @@ suite "Directory Registration and Screenshot Integration Tests":
       check isImageFile(screenshot2) == true
 
   test "Mixed file types with directory registration":
-    requireTiDB:
-      # Create different file types in screenshots directory
+    # Create different file types in screenshots directory
       let pngFile = createMockScreenshot(screenshotDir, "screenshot.png")
       
       let txtFile = screenshotDir / "screenshot_log.txt"
@@ -369,8 +357,7 @@ suite "Directory Registration and Screenshot Integration Tests":
       check not ("\x89PNG" in encoded)  # Should not contain raw PNG signature
 
   test "Nested directory structure with registration":
-    requireTiDB:
-      # Create nested screenshot structure
+    # Create nested screenshot structure
       let subDir = screenshotDir / "level1"
       createDir(subDir)
       

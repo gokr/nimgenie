@@ -20,12 +20,14 @@ NimGenie bridges the gap between AI assistants and Nim development by providing 
 - Search symbols by name, type, or module across your entire codebase
 - Automatic indexing of project dependencies and Nimble packages
 - Cross-reference functionality to understand code relationships
+- Dependency-based incremental indexing that only re-indexes changed files and their dependents
 
 ### 🛠️ **Development Tasks**
 - Syntax and semantic checking with detailed error reporting
 - Project statistics and codebase metrics
 - Nimble package management (install, search, upgrade)
 - Project creation and build automation
+- Dependency-based incremental indexing for efficient re-indexing
 
 ### 📁 **Resource Management**
 - Serve project files and assets as MCP resources
@@ -111,6 +113,21 @@ For some feeling how to use Nimgenie, see the [tutorial](TUTORIAL.md).
 ## Architecture
 
 NimGenie is built with Nimcp, a library that makes it easy to build MCP servers. We mostly call out to Nim tools like nimble and the Nim compiler etc to perform indexing and other tasks. The database used is Tidb because it is MySQL compatible, fully Open Source, can run locally or is also available in the cloud and supports vector based searching and more. Embeddings are calculated via Ollama with an embeddings LLM running, typically locally.
+
+### Dependency Tracking
+
+NimGenie uses the Nim compiler's built-in dependency analysis (`nim genDepend`) to track file dependencies efficiently. This enables:
+
+- **Incremental indexing**: Only re-index files that have changed and their dependents
+- **Accurate dependency tracking**: Leverages the compiler's understanding of imports and modules
+- **Efficient updates**: Avoids full re-indexing on every change
+- **Cascade changes**: Automatically identifies all files affected by a dependency change
+
+The dependency information is stored in the TiDB database with tables for:
+- `file_dependency`: Tracks source → target file dependencies
+- `file_modification`: Stores file modification times, sizes, and hashes
+
+This approach is more reliable than manual file hash/modification tracking as it uses the compiler's own dependency analysis, handling complex import scenarios correctly.
 
 ## Contributing
 
