@@ -1,15 +1,15 @@
 # NimGenie
 
-**MCP Server for Intelligent Nim Programming**
+**MCP Server for AI assisted Nim Programming**
 
-NimGenie is a comprehensive Model Context Protocol (MCP) server that provides AI assistants with deep understanding of Nim codebases through intelligent code analysis, symbol indexing, and development assistance.
+NimGenie is a Model Context Protocol (MCP) server that provides AI assistants with deep understanding of Nim codebases through intelligent code analysis, symbol indexing, and development assistance.
 
 ## What is NimGenie?
 
-NimGenie bridges the gap between AI assistants and Nim development by providing:
+NimGenie bridges the gap between AI assistants and Nim development by providing MCP tools for the LLM to use to:
 
 - **Intelligent Symbol Search**: Find functions, types, and variables across your entire codebase and dependencies
-- **Real-time Code Analysis**: Syntax checking and semantic validation using the Nim compiler
+- **Real-time Code Analysis**: Perform syntax checking and semantic validation using the Nim compiler
 - **Dependency Management**: Automatic discovery and indexing of Nimble packages
 - **Multi-Project Support**: Work with multiple Nim projects simultaneously
 - **Persistent Storage**: TiDB-backed symbol database that survives server restarts
@@ -42,19 +42,19 @@ NimGenie bridges the gap between AI assistants and Nim development by providing:
 ### 1. Prerequisites
 
 - **Nim 2.2.4+**: Install from [nim-lang.org](https://nim-lang.org)
-- **TiDB**: For symbol storage (see setup below)
-- **Nimble**: For package management (included with Nim)
+- **TiDB**: For persistent storage (see setup below)
+- **Ollama**: For executing embeddings analysis
 
 ### 2. TiDB Setup
 
-NimGenie uses TiDB for persistent symbol storage. The easiest way to get started is with TiUP:
+NimGenie uses TiDB for persistent storage. The easiest way to get started running Tidb locally is with TiUP:
 
 ```bash
 # Install TiUP (TiDB cluster management tool)
 curl --proto '=https' --tlsv1.2 -sSf https://tiup-mirrors.pingcap.com/install.sh | sh
 
-# Start TiDB playground (includes TiDB, TiKV, PD)
-tiup playground
+# Start a persistent TiDB playground for Nimgenie (includes TiDB, TiKV, PD)
+tiup playground --tag nimgenie
 ```
 
 This starts TiDB on `localhost:4000` with default settings (user: `root`, password: empty).
@@ -71,94 +71,25 @@ nimble build
 
 # Run NimGenie
 ./nimgenie
+
+# Install globally
+nimble install
 ```
 
 ### 4. Configuration
 
-NimGenie can be configured via environment variables or command-line options:
+NimGenie can be configured via environment variables or command-line options.
 
-```bash
-# Environment variables
-export TIDB_HOST=localhost
-export TIDB_PORT=4000
-export TIDB_USER=root
-export TIDB_PASSWORD=your_password
-export TIDB_DATABASE=nimgenie
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `TIDB_HOST` | Database host | localhost |
+| `TIDB_PORT` | Database port | 4000 |
+| `TIDB_USER` | Database user | root |
+| `TIDB_PASSWORD` | Database password | (empty) |
+| `TIDB_DATABASE` | Database name | nimgenie |
+| `TIDB_POOL_SIZE` | Connection pool size | 10 |
 
-# Command-line options
-./nimgenie --port 8080 --host localhost --project /path/to/nim/project
-```
-
-## Usage Examples
-
-### Basic Workflow
-
-1. **Index your project**:
-   ```
-   AI: Use indexCurrentProject() to analyze the codebase
-   ```
-
-2. **Search for symbols**:
-   ```
-   AI: Use searchSymbols("HttpServer", "type") to find HTTP server types
-   ```
-
-3. **Get detailed information**:
-   ```
-   AI: Use getSymbolInfo("newHttpServer") for usage details
-   ```
-
-4. **Check syntax**:
-   ```
-   AI: Use checkSyntax("src/main.nim") to validate code
-   ```
-
-### Package Management
-
-```bash
-# Install a package
-AI: Use nimbleInstallPackage("jester", ">= 0.5.0")
-
-# Index the package for search
-AI: Use indexNimblePackage("jester")
-
-# Search package symbols
-AI: Use searchSymbols("get", "proc", "jester")
-```
-
-### Project Development
-
-```bash
-# Create a new project
-AI: Use nimbleInitProject("myapp", "bin")
-
-# Build the project
-AI: Use nimbleBuildProject()
-
-# Run tests
-AI: Use nimbleTestProject()
-```
-
-## MCP Integration
-
-NimGenie implements the Model Context Protocol, making it easy to integrate with AI development tools:
-
-### Supported MCP Tools
-
-- **Project Analysis**: `indexCurrentProject`, `getProjectStats`, `checkSyntax`
-- **Symbol Search**: `searchSymbols`, `getSymbolInfo`
-- **Package Management**: `nimbleInstallPackage`, `nimbleSearchPackages`, `listNimblePackages`
-- **Development**: `nimbleBuildProject`, `nimbleTestProject`, `nimbleRunProject`
-- **Resources**: `addDirectoryResource`, `listDirectoryResources`
-
-### Resource Templates
-
-- `/files/{dirIndex}/{relativePath}`: Access files from registered directories
-- `/screenshots/{filepath}`: Access screenshot files for game development
-
-## Configuration Options
-
-### Command Line Options
+Command-line options:
 
 ```
 Usage: nimgenie [OPTIONS]
@@ -175,26 +106,15 @@ Options:
       --no-discovery      Disable Nimble package discovery
 ```
 
-### Environment Variables
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `TIDB_HOST` | Database host | localhost |
-| `TIDB_PORT` | Database port | 4000 |
-| `TIDB_USER` | Database user | root |
-| `TIDB_PASSWORD` | Database password | (empty) |
-| `TIDB_DATABASE` | Database name | nimgenie |
-| `TIDB_POOL_SIZE` | Connection pool size | 10 |
+### 5. Tutorial
+
+For some feeling how to use Nimgenie, see the [tutorial](TUTORIAL.md).
+
 
 ## Architecture
 
-NimGenie uses a multi-layered architecture for scalable Nim code analysis:
-
-- **MCP Layer**: Handles AI assistant communication and tool registration
-- **Analysis Layer**: Nim compiler integration for syntax checking and symbol extraction
-- **Storage Layer**: TiDB database with Debby ORM for persistent symbol storage
-- **Cache Layer**: In-memory caching for frequently accessed symbols
-- **Resource Layer**: File serving and screenshot management
+NimGenie is built with Nimcp, a library that makes it easy to build MCP servers. We mostly call out to Nim tools like nimble, the Nim compiler etc to perform indexing and other tasks. The database used is Tidb because it is MySQL compatible, fully Open Source, can run locally or is available in the cloud and supports vector based searching and more. Embeddings are calculated via Ollama with typically an embeddings LLM running locally.
 
 ## Contributing
 
@@ -206,7 +126,7 @@ MIT License - see LICENSE file for details.
 
 ## Links
 
-- **GitHub**: [github.com/gokr/nimgenie](https://github.com/gokr/nimgenie)
+- **Nimcp**: [github.com/gokr/nimcp](https://github.com/gokr/nimcp)
 - **MCP Protocol**: [modelcontextprotocol.io](https://modelcontextprotocol.io)
 - **Nim Language**: [nim-lang.org](https://nim-lang.org)
 - **TiDB Database**: [pingcap.com](https://pingcap.com)
