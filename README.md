@@ -16,12 +16,12 @@ NimGenie bridges the gap between AI assistants and Nim development by providing 
 
 ## Key Features
 
-### 🔍 **Smart Code Discovery**
+### 🔍 **Code Indexing**
 - Search symbols by name, type, or module across your entire codebase
 - Automatic indexing of project dependencies and Nimble packages
 - Cross-reference functionality to understand code relationships
 
-### 🛠️ **Development Tools**
+### 🛠️ **Development Tasks**
 - Syntax and semantic checking with detailed error reporting
 - Project statistics and codebase metrics
 - Nimble package management (install, search, upgrade)
@@ -32,10 +32,6 @@ NimGenie bridges the gap between AI assistants and Nim development by providing 
 - Screenshot workflow support for game development
 - Directory-based resource organization
 
-### 🏗️ **Scalable Architecture**
-- TiDB database for high-performance symbol storage
-- Connection pooling for concurrent access
-- In-memory caching for frequently accessed symbols
 
 ## Quick Start
 
@@ -43,7 +39,7 @@ NimGenie bridges the gap between AI assistants and Nim development by providing 
 
 - **Nim 2.2.4+**: Install from [nim-lang.org](https://nim-lang.org)
 - **TiDB**: For persistent storage (see setup below)
-- **Ollama**: For executing embeddings analysis
+- **Ollama**: For running a local LLM to perform embeddings
 
 ### 2. TiDB Setup
 
@@ -114,7 +110,7 @@ For some feeling how to use Nimgenie, see the [tutorial](TUTORIAL.md).
 
 ## Architecture
 
-NimGenie is built with Nimcp, a library that makes it easy to build MCP servers. We mostly call out to Nim tools like nimble, the Nim compiler etc to perform indexing and other tasks. The database used is Tidb because it is MySQL compatible, fully Open Source, can run locally or is available in the cloud and supports vector based searching and more. Embeddings are calculated via Ollama with typically an embeddings LLM running locally.
+NimGenie is built with Nimcp, a library that makes it easy to build MCP servers. We mostly call out to Nim tools like nimble and the Nim compiler etc to perform indexing and other tasks. The database used is Tidb because it is MySQL compatible, fully Open Source, can run locally or is also available in the cloud and supports vector based searching and more. Embeddings are calculated via Ollama with an embeddings LLM running, typically locally.
 
 ## Contributing
 
