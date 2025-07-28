@@ -46,7 +46,14 @@ proc parseNimDocJson*(indexer: Indexer, jsonOutput: string): int =
       echo "No entries found in nim jsondoc output"
       return 0
     
-    let moduleName = if docJson.hasKey("module"): docJson["module"].getStr() else: "unknown"
+    # Extract module name from the file path since nim jsondoc doesn't provide module field
+    let filePath = if docJson.hasKey("orig"): docJson["orig"].getStr() else: ""
+    let moduleName = if filePath != "": extractFilename(filePath).replace(".nim", "") else: "unknown"
+    
+    # Store the module in the database
+    if filePath != "" and moduleName != "unknown":
+      let moduleDoc = if docJson.hasKey("moduleDescription"): docJson["moduleDescription"].getStr() else: ""
+      discard indexer.database.insertModule(moduleName, filePath, "", moduleDoc)
     
     for entry in docJson["entries"]:
       if not entry.hasKey("name") or not entry.hasKey("type"):
@@ -151,15 +158,15 @@ proc indexSingleFile*(indexer: Indexer, filePath: string): tuple[success: bool, 
   try:
     echo fmt"Indexing file: {filePath}"
     
-    # Generate JSON documentation for the file
+    # Generate JSON documentation for the file using clean output
     let absolutePath = if isAbsolute(filePath): filePath else: indexer.projectPath / filePath
-    let cmdResult = indexer.analyzer.execNimCommand("jsondoc", @[absolutePath])
+    let cmdResult = indexer.analyzer.extractJsonDoc(absolutePath)
     
     if cmdResult.exitCode != 0:
       echo fmt"Failed to generate jsondoc for {filePath}: {cmdResult.output}"
       return (success: false, symbolCount: 0)
     
-    # Parse and store the symbols
+    # Parse and store the symbols from clean JSON output
     let symbolCount = indexer.parseNimDocJson(cmdResult.output)
     
     # Also try to find and parse corresponding .idx file if it exists

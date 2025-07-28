@@ -23,6 +23,21 @@ proc execNimCommand*(analyzer: Analyzer, command: string, args: seq[string] = @[
   except OSError as e:
     return (output: fmt"Error executing nim command: {e.msg}", exitCode: -1)
 
+proc extractJsonDoc*(analyzer: Analyzer, filePath: string): tuple[output: string, exitCode: int] =
+  ## Extract JSON documentation from a Nim file using jsondoc with clean output
+  try:
+    let args = @["--stdout:on", "--hints:off", "--warnings:off", filePath]
+    let dir = analyzer.projectPath
+    let fullCommand = "nim jsondoc " & args.join(" ")
+    
+    echo fmt"Executing: {fullCommand} in {dir}"
+    
+    let (output, exitCode) = execCmdEx("nim jsondoc " & args.join(" "), workingDir = dir)
+    
+    return (output: output, exitCode: exitCode)
+  except OSError as e:
+    return (output: fmt"Error executing nim jsondoc command: {e.msg}", exitCode: -1)
+
 proc checkSyntax*(analyzer: Analyzer, targetPath: string): JsonNode =
   ## Check syntax and semantics using nim check
   try:
