@@ -20,7 +20,10 @@ proc execNimCommand*(analyzer: Analyzer, command: string, args: seq[string] = @[
         let fullCommand = "nim " & command & " " & args.join(" ")
         echo fmt"Executing: {fullCommand} in {dir}"
     
-    let (output, exitCode) = execCmdEx("nim " & command & " " & args.join(" "), workingDir = dir)
+    # Redirect stderr to /dev/null in testing mode to suppress compilation errors
+    let redirectStderr = when defined(testing): " 2>/dev/null" else: ""
+    let fullCmd = "nim " & command & " " & args.join(" ") & redirectStderr
+    let (output, exitCode) = execCmdEx(fullCmd, workingDir = dir)
     
     return (output: output, exitCode: exitCode)
   except OSError as e:

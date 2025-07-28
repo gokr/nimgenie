@@ -240,9 +240,9 @@ suite "Screenshot Workflow Error Handling Tests":
   
   setup:
     testTempDir = getTempDir() / "nimgenie_screenshot_error_test_" & $getTime().toUnix()
-      screenshotDir = testTempDir / "screenshots"
-      createDir(testTempDir)
-      createDir(screenshotDir)
+    screenshotDir = testTempDir / "screenshots"
+    createDir(testTempDir)
+    createDir(screenshotDir)
     
   teardown:
     if dirExists(testTempDir):
@@ -250,33 +250,33 @@ suite "Screenshot Workflow Error Handling Tests":
 
   test "Request non-existent screenshot file":
     # Test file existence checking
-      let nonexistentFile = screenshotDir / "nonexistent.png"
-      check not fileExists(nonexistentFile)
+    let nonexistentFile = screenshotDir / "nonexistent.png"
+    check not fileExists(nonexistentFile)
 
   test "Path traversal security test":
     # Create a file outside the screenshots directory
-      let outsideFile = testTempDir / "outside.txt"
-      writeFile(outsideFile, "This file should not be accessible")
-      
-      # Validate the file structure
-      check fileExists(outsideFile)
-      check not fileExists(screenshotDir / "outside.txt")
-      
-      # Test that path traversal would need to be handled by the server layer
-      let maliciousPath = screenshotDir / "../outside.txt"
-      check not fileExists(maliciousPath.normalizedPath())
+    let outsideFile = testTempDir / "outside.txt"
+    writeFile(outsideFile, "This file should not be accessible")
+    
+    # Validate the file structure
+    check fileExists(outsideFile)
+    check not fileExists(screenshotDir / "outside.txt")
+    
+    # Test that path traversal would need to be handled by the server layer
+    let maliciousPath = screenshotDir / "../outside.txt"
+    check not fileExists(maliciousPath.normalizedPath())
 
   test "No screenshots directory exists":
     # Remove the screenshots directory to test error handling
-      if dirExists(screenshotDir):
-        removeDir(screenshotDir)
-      
-      # Validate directory doesn't exist
-      check not dirExists(screenshotDir)
-      
-      # Test that file access would fail
-      let testFile = screenshotDir / "test.png"
-      check not fileExists(testFile)
+    if dirExists(screenshotDir):
+      removeDir(screenshotDir)
+    
+    # Validate directory doesn't exist
+    check not dirExists(screenshotDir)
+    
+    # Test that file access would fail
+    let testFile = screenshotDir / "test.png"
+    check not fileExists(testFile)
 
 suite "Directory Registration and Screenshot Integration Tests":
   
@@ -286,10 +286,10 @@ suite "Directory Registration and Screenshot Integration Tests":
   
   setup:
     testTempDir = getTempDir() / "nimgenie_dir_screenshot_test_" & $getTime().toUnix()
-      screenshotDir = testTempDir / "screenshots"
-      createDir(testTempDir)
-      createDir(screenshotDir)
-      testDb = createTestDatabase()
+    screenshotDir = testTempDir / "screenshots"
+    createDir(testTempDir)
+    createDir(screenshotDir)
+    testDb = createTestDatabase()
     
   teardown:
     cleanupTestDatabase(testDb)
@@ -298,87 +298,87 @@ suite "Directory Registration and Screenshot Integration Tests":
 
   test "Directory registration with screenshot files":
     # Create screenshot files
-      let screenshot1 = createMockScreenshot(screenshotDir, "game_state_001.png")
-      let screenshot2 = createMockScreenshot(screenshotDir, "error_screen.png")
-      
-      # Register screenshots directory
-      let success = testDb.addRegisteredDirectory(screenshotDir, "Game Screenshots", "Test screenshots")
-      check success == true
-      
-      # Retrieve registered directories
-      let dirs = testDb.getRegisteredDirectories()
-      check dirs.kind == JArray
-      check dirs.len == 1
-      
-      let entry = dirs[0]
-      check entry["path"].getStr() == screenshotDir.normalizedPath().absolutePath()
-      check entry["name"].getStr() == "Game Screenshots"
-      check entry["description"].getStr() == "Test screenshots"
-      
-      # Verify files still exist in registered directory
-      check fileExists(screenshot1)
-      check fileExists(screenshot2)
-      
-      # Test MIME type detection
-      check detectMimeType(screenshot1) == "image/png"
-      check detectMimeType(screenshot2) == "image/png"
-      
-      # Test image file detection
-      check isImageFile(screenshot1) == true
-      check isImageFile(screenshot2) == true
+    let screenshot1 = createMockScreenshot(screenshotDir, "game_state_001.png")
+    let screenshot2 = createMockScreenshot(screenshotDir, "error_screen.png")
+    
+    # Register screenshots directory
+    let success = testDb.addRegisteredDirectory(screenshotDir, "Game Screenshots", "Test screenshots")
+    check success == true
+    
+    # Retrieve registered directories
+    let dirs = testDb.getRegisteredDirectories()
+    check dirs.kind == JArray
+    check dirs.len == 1
+    
+    let entry = dirs[0]
+    check entry["path"].getStr() == screenshotDir.normalizedPath().absolutePath()
+    check entry["name"].getStr() == "Game Screenshots"
+    check entry["description"].getStr() == "Test screenshots"
+    
+    # Verify files still exist in registered directory
+    check fileExists(screenshot1)
+    check fileExists(screenshot2)
+    
+    # Test MIME type detection
+    check detectMimeType(screenshot1) == "image/png"
+    check detectMimeType(screenshot2) == "image/png"
+    
+    # Test image file detection
+    check isImageFile(screenshot1) == true
+    check isImageFile(screenshot2) == true
 
   test "Mixed file types with directory registration":
     # Create different file types in screenshots directory
-      let pngFile = createMockScreenshot(screenshotDir, "screenshot.png")
-      
-      let txtFile = screenshotDir / "screenshot_log.txt"
-      writeFile(txtFile, "Screenshot taken at 2023-12-01 15:30:45\nResolution: 1920x1080")
-      
-      let jsonFile = screenshotDir / "screenshot_metadata.json"
-      writeFile(jsonFile, """{"file": "screenshot.png", "timestamp": "2023-12-01T15:30:45Z"}""")
-      
-      # Register directory
-      let success = testDb.addRegisteredDirectory(screenshotDir, "Mixed Screenshots", "Screenshots with metadata")
-      check success == true
-      
-      # Test MIME type detection for each
-      check detectMimeType(pngFile) == "image/png"
-      check detectMimeType(txtFile) == "text/plain"
-      check detectMimeType(jsonFile) == "application/json"
-      
-      # Test image detection
-      check isImageFile(pngFile) == true
-      check isImageFile(txtFile) == false
-      check isImageFile(jsonFile) == false
-      
-      # Test base64 encoding for PNG file
-      let encoded = encodeFileAsBase64(pngFile)
-      check encoded.len > 0
-      check not ("\x89PNG" in encoded)  # Should not contain raw PNG signature
+    let pngFile = createMockScreenshot(screenshotDir, "screenshot.png")
+    
+    let txtFile = screenshotDir / "screenshot_log.txt"
+    writeFile(txtFile, "Screenshot taken at 2023-12-01 15:30:45\nResolution: 1920x1080")
+    
+    let jsonFile = screenshotDir / "screenshot_metadata.json"
+    writeFile(jsonFile, """{"file": "screenshot.png", "timestamp": "2023-12-01T15:30:45Z"}""")
+    
+    # Register directory
+    let success = testDb.addRegisteredDirectory(screenshotDir, "Mixed Screenshots", "Screenshots with metadata")
+    check success == true
+    
+    # Test MIME type detection for each
+    check detectMimeType(pngFile) == "image/png"
+    check detectMimeType(txtFile) == "text/plain"
+    check detectMimeType(jsonFile) == "application/json"
+    
+    # Test image detection
+    check isImageFile(pngFile) == true
+    check isImageFile(txtFile) == false
+    check isImageFile(jsonFile) == false
+    
+    # Test base64 encoding for PNG file
+    let encoded = encodeFileAsBase64(pngFile)
+    check encoded.len > 0
+    check not ("\x89PNG" in encoded)  # Should not contain raw PNG signature
 
   test "Nested directory structure with registration":
     # Create nested screenshot structure
-      let subDir = screenshotDir / "level1"
-      createDir(subDir)
-      
-      let mainScreenshot = createMockScreenshot(screenshotDir, "main_menu.png")
-      let levelScreenshot = createMockScreenshot(subDir, "boss_fight.png")
-      
-      # Register main screenshots directory
-      let success = testDb.addRegisteredDirectory(screenshotDir, "Game Screenshots", "Main screenshot directory")
-      check success == true
-      
-      # List directory files
-      let files = listDirectoryFiles(screenshotDir)
-      check files.len == 2
-      check "main_menu.png" in files
-      check ("level1/boss_fight.png" in files or "level1\\boss_fight.png" in files)  # Handle Windows paths
-      
-      # Verify both screenshots exist and are valid
-      check fileExists(mainScreenshot)
-      check fileExists(levelScreenshot)
-      check readFile(mainScreenshot).startsWith("\x89PNG")
-      check readFile(levelScreenshot).startsWith("\x89PNG")
+    let subDir = screenshotDir / "level1"
+    createDir(subDir)
+    
+    let mainScreenshot = createMockScreenshot(screenshotDir, "main_menu.png")
+    let levelScreenshot = createMockScreenshot(subDir, "boss_fight.png")
+    
+    # Register main screenshots directory
+    let success = testDb.addRegisteredDirectory(screenshotDir, "Game Screenshots", "Main screenshot directory")
+    check success == true
+    
+    # List directory files
+    let files = listDirectoryFiles(screenshotDir)
+    check files.len == 2
+    check "main_menu.png" in files
+    check ("level1/boss_fight.png" in files or "level1\\boss_fight.png" in files)  # Handle Windows paths
+    
+    # Verify both screenshots exist and are valid
+    check fileExists(mainScreenshot)
+    check fileExists(levelScreenshot)
+    check readFile(mainScreenshot).startsWith("\x89PNG")
+    check readFile(levelScreenshot).startsWith("\x89PNG")
 
 when isMainModule:
   # Allow running this test directly

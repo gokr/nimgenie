@@ -703,9 +703,15 @@ proc getFileDependencies*(db: Database, sourceFile: string = "", targetFile: str
       params.add(targetFile)
     
     let rows = db.pool.withDb:
-      if params.len > 0:
-        db.query(sqlQuery, params)
+      case params.len:
+      of 0:
+        db.query(sqlQuery)
+      of 1:
+        db.query(sqlQuery, params[0])
+      of 2:
+        db.query(sqlQuery, params[0], params[1])
       else:
+        # Fallback for more parameters - shouldn't happen in this case
         db.query(sqlQuery)
     
     for row in rows:
