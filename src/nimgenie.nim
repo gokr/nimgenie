@@ -589,25 +589,19 @@ Use searchSymbols to search across all indexed code.
       ## - query: Symbol name or partial name to search for (supports partial matching)
       ## - symbolType: Optional filter by symbol type (e.g., "proc", "type", "var", "const", "template", "macro")
       ## - moduleName: Optional filter to search only within a specific module or package
-      {.cast(gcsafe).}:
-        try:
-          # Check cache first (symbol cache access)
+      try:
+        withGenie:
+          # Check cache first
           let cacheKey = fmt"{query}:{symbolType}:{moduleName}"
-          block cacheCheck:
-            withSymbolCache:
-              if genie.symbolCache.hasKey(cacheKey):
-                return $genie.symbolCache[cacheKey]
+          if genie.symbolCache.hasKey(cacheKey):
+            return $genie.symbolCache[cacheKey]
           
-          # Database operation (no locks needed - database is thread-safe)
           let results = genie.database.searchSymbols(query, symbolType, moduleName, limit = 1000)
-          
-          # Update cache (symbol cache access)
-          withSymbolCache:
-            genie.symbolCache[cacheKey] = results
+          genie.symbolCache[cacheKey] = results
           
           return $results
-        except Exception as e:
-          return fmt"Search failed: {e.msg}"
+      except Exception as e:
+        return fmt"Search failed: {e.msg}"
         
   mcpTool:
     proc getSymbolInfo(symbolName: string, moduleName: string = ""): string {.gcsafe.} =
@@ -617,21 +611,15 @@ Use searchSymbols to search across all indexed code.
       ## - symbolName: Exact name of the symbol to look up
       ## - moduleName: Optional module name to disambiguate symbols with the same name in different modules
       try:
-        # Check cache first (symbol cache access)
-        let cacheKey = fmt"info:{symbolName}:{moduleName}"
-        block cacheCheck:
-          withSymbolCache:
-            if genie.symbolCache.hasKey(cacheKey):
-              return $genie.symbolCache[cacheKey]
-        
-        # Database operation (no locks needed - database is thread-safe)
-        let info = genie.database.getSymbolInfo(symbolName, moduleName)
-        
-        # Update cache (symbol cache access)
-        withSymbolCache:
+        withGenie:
+          let cacheKey = fmt"info:{symbolName}:{moduleName}"
+          if genie.symbolCache.hasKey(cacheKey):
+            return $genie.symbolCache[cacheKey]
+          
+          let info = genie.database.getSymbolInfo(symbolName, moduleName)
           genie.symbolCache[cacheKey] = info
-        
-        return $info
+          
+          return $info
       except Exception as e:
         return fmt"Failed to get symbol info: {e.msg}"
 
@@ -650,21 +638,22 @@ Use searchSymbols to search across all indexed code.
         if limit > 50:
           return "Error: Maximum limit is 50 results"
           
-        # Database operation (no locks needed - database is thread-safe)
-        # Create embedding generator
-        let embeddingGen = newEmbeddingGenerator(genie.config)
-        if not embeddingGen.available:
-          return "Error: Ollama not available. Please ensure Ollama is running with an embedding model."
-        
-        # Generate embedding for the query
-        let queryEmbResult = embeddingGen.generateEmbedding(query)
-        if not queryEmbResult.success:
-          return fmt"Error generating query embedding: {queryEmbResult.error}"
-        
-        let queryEmbedding = embeddingToJson(queryEmbResult.embedding)
-        let results = genie.database.semanticSearchSymbols(queryEmbedding, "", "", limit)
-        
-        return $results
+        withGenie:
+          # Database operation (no locks needed - database is thread-safe)
+          # Create embedding generator
+          let embeddingGen = newEmbeddingGenerator(genie.config)
+          if not embeddingGen.available:
+            return "Error: Ollama not available. Please ensure Ollama is running with an embedding model."
+          
+          # Generate embedding for the query
+          let queryEmbResult = embeddingGen.generateEmbedding(query)
+          if not queryEmbResult.success:
+            return fmt"Error generating query embedding: {queryEmbResult.error}"
+          
+          let queryEmbedding = embeddingToJson(queryEmbResult.embedding)
+          let results = genie.database.semanticSearchSymbols(queryEmbedding, "", "", limit)
+          
+          return $results
       except Exception as e:
         return fmt"Semantic search failed: {e.msg}"
   
