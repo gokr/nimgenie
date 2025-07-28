@@ -50,3 +50,6 @@ htmldocs/
 
 # Roocode
 .roo/
+
+# Claude code
+.claude/
