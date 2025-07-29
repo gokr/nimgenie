@@ -192,8 +192,20 @@ proc getDependencies*(analyzer: Analyzer): JsonNode =
         if line.contains("bin") and line.contains("="):
           let parts = line.split("=")
           if parts.len > 1:
-            let binName = parts[1].strip().replace("@[", "").replace("]", "").replace("\"", "") 
-            mainFile = analyzer.projectPath / (binName & ".nim")
+            let binName = parts[1].strip().replace("@[", "").replace("]", "").replace("\"", "")
+            # Handle both relative paths and simple names  
+            if "/" in binName:
+              mainFile = analyzer.projectPath / (binName & ".nim")
+            else:
+              # Check in project root first, then src directory
+              let candidateRoot = analyzer.projectPath / (binName & ".nim")
+              let candidateSrc = analyzer.projectPath / "src" / (binName & ".nim")
+              if fileExists(candidateRoot):
+                mainFile = candidateRoot
+              elif fileExists(candidateSrc):
+                mainFile = candidateSrc
+              else:
+                mainFile = candidateRoot  # Default to root for genDepend attempt
             break
       if mainFile != "":
         break
@@ -243,22 +255,23 @@ proc getDependencies*(analyzer: Analyzer): JsonNode =
     let cmdResult = analyzer.execNimCommand("genDepend", args)
     
     if cmdResult.exitCode == 0:
-      # nim genDepend creates a .dot file, not stdout output
-      let dotFile = mainFile.changeFileExt(".dot")
-      if fileExists(dotFile):
-        let dotContent = readFile(dotFile)
+      # nim genDepend creates a .deps file in the project root
+      let mainFileName = extractFilename(mainFile).changeFileExt("")
+      let depsFile = analyzer.projectPath / (mainFileName & ".deps")
+      if fileExists(depsFile):
+        let depsContent = readFile(depsFile)
         return %*{
           "status": "success", 
-          "dependencies": dotContent,
+          "dependencies": depsContent,
           "message": "Dependencies generated successfully",
           "mainFile": mainFile,
-          "dotFile": dotFile
+          "depsFile": depsFile
         }
       else:
         return %*{
           "status": "error",
-          "message": "Dependencies dot file not found",
-          "dotFile": dotFile,
+          "message": "Dependencies deps file not found",
+          "depsFile": depsFile,
           "mainFile": mainFile
         }
     else:

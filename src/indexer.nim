@@ -294,39 +294,62 @@ proc parseAndStoreDependencies*(indexer: Indexer): bool =
     # Clear existing dependencies for this project
     indexer.database.clearFileDependencies()
     
-    var storedCount = 0
+    # Parse .deps file format - each line is a file path that was processed
+    var projectFiles: seq[string] = @[]
     for line in lines:
       let trimmed = line.strip()
-      if trimmed == "" or trimmed.startsWith("digraph") or trimmed == "}" or trimmed == "{":
+      if trimmed == "":
         continue
       
-      # Parse DOT format line: "source" -> "target";
-      if "->" in trimmed:
-        let parts = trimmed.split("->")
-        if parts.len != 2:
-          continue
-        
-        # Extract quoted module names
-        var sourceFile = parts[0].strip()
-        var targetFile = parts[1].strip()
-        
-        # Remove quotes and semicolon
-        if sourceFile.startsWith("\"") and sourceFile.endsWith("\""):
-          sourceFile = sourceFile[1..^2]
-        if targetFile.endsWith("\";"):
-          targetFile = targetFile[0..^3]
-        if targetFile.startsWith("\"") and targetFile.endsWith("\""):
-          targetFile = targetFile[1..^2]
-        
-        # Make paths absolute
-        let absSource = if isAbsolute(sourceFile): sourceFile else: indexer.projectPath / sourceFile
-        let absTarget = if isAbsolute(targetFile): targetFile else: indexer.projectPath / targetFile
-        
-        # Insert the dependency - don't fail if individual insertion fails
-        if indexer.database.insertFileDependency(absSource, absTarget):
-          storedCount.inc()
+      # Only track files within our project directory (not system libraries)
+      if trimmed.startsWith(indexer.projectPath):
+        projectFiles.add(trimmed)
     
-    echo fmt"Successfully stored {storedCount} dependencies"
+    # For each project file, parse its imports to determine dependencies
+    var storedCount = 0
+    for filePath in projectFiles:
+      if fileExists(filePath) and filePath.endsWith(".nim"):
+        try:
+          let content = readFile(filePath)
+          let contentLines = content.splitLines()
+          
+          # Look for import statements
+          for contentLine in contentLines:
+            let trimmedLine = contentLine.strip()
+            if trimmedLine.startsWith("import ") or trimmedLine.startsWith("from "):
+              # Extract module names from import statement
+              var importPart = ""
+              if trimmedLine.startsWith("import "):
+                importPart = trimmedLine[7..^1]  # Remove "import "
+              elif trimmedLine.startsWith("from "):
+                let parts = trimmedLine.split(" import ")
+                if parts.len > 0:
+                  importPart = parts[0][5..^1]  # Remove "from "
+              
+              if importPart != "":
+                # Clean up the import part (remove comments, split multiple imports)
+                importPart = importPart.split("#")[0].strip()  # Remove comments
+                let modules = importPart.split(",")
+                
+                for module in modules:
+                  let cleanModule = module.strip()
+                  if cleanModule != "" and not cleanModule.startsWith("std/") and not cleanModule.startsWith("system"):
+                    # Try to find this module in our project files
+                    let possiblePaths = @[
+                      indexer.projectPath / "src" / (cleanModule & ".nim"),
+                      indexer.projectPath / (cleanModule & ".nim")
+                    ]
+                    
+                    for possiblePath in possiblePaths:
+                      if fileExists(possiblePath) and possiblePath in projectFiles:
+                        # Found a dependency: filePath depends on possiblePath
+                        if indexer.database.insertFileDependency(filePath, possiblePath):
+                          storedCount.inc()
+                        break
+        except Exception as e:
+          echo fmt"Warning: Could not parse imports from {filePath}: {e.msg}"
+    
+    echo fmt"Successfully stored {storedCount} dependencies from .deps file analysis"
     return true
   except Exception as e:
     echo "Error parsing and storing dependencies: ", e.msg
