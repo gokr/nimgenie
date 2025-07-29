@@ -20,3 +20,11 @@ type Config* = object
   vectorSimilarityThreshold*: float
   # Dependency tracking configuration
   enableDependencyTracking*: bool  # Enable dependency-based incremental indexing
+  # External database configuration (separate from NimGenie's internal TiDB)
+  externalDbType*: string      # "mysql", "tidb", "postgresql"
+  externalDbHost*: string
+  externalDbPort*: int  
+  externalDbUser*: string
+  externalDbPassword*: string
+  externalDbDatabase*: string
+  externalDbPoolSize*: int

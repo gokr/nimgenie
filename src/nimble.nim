@@ -127,7 +127,8 @@ proc nimbleBuildWithStreaming*(ctx: McpRequestContext, workingDir: string, targe
       args.add("--define:" & mode)
     
     let fullCommand = "nimble " & args.join(" ")
-    ctx.info(fmt"Starting build: {fullCommand}")
+    # Send proper streaming notification instead of just logging
+    ctx.sendNotification("progress", %*{"message": fmt"Starting build: {fullCommand}", "stage": "starting"})
     
     # Start the process for streaming output
     let process = startProcess(
@@ -143,8 +144,8 @@ proc nimbleBuildWithStreaming*(ctx: McpRequestContext, workingDir: string, targe
     while readLine(process.outputStream, line):
       outputLines.add(line)
       
-      # Stream the line to the client in real-time
-      ctx.info(line)
+      # Send streaming notification for each line of output
+      ctx.sendNotification("progress", %*{"message": line, "stage": "building"})
       
       # Check if we should exit early due to cancellation
       if ctx.isCancelled():
@@ -152,6 +153,7 @@ proc nimbleBuildWithStreaming*(ctx: McpRequestContext, workingDir: string, targe
         result.success = false
         result.errorMsg = "Build was cancelled"
         result.output = outputLines.join("\n")
+        ctx.sendNotification("progress", %*{"message": "Build was cancelled", "stage": "cancelled"})
         return
     
     # Wait for process to complete and get exit code
@@ -163,15 +165,15 @@ proc nimbleBuildWithStreaming*(ctx: McpRequestContext, workingDir: string, targe
     
     if not result.success:
       result.errorMsg = fmt"Nimble build failed with exit code {exitCode}"
-      ctx.info(fmt"Build completed with exit code: {exitCode}")
+      ctx.sendNotification("progress", %*{"message": fmt"Build completed with exit code: {exitCode}", "stage": "failed", "exitCode": exitCode})
     else:
-      ctx.info("Build completed successfully")
+      ctx.sendNotification("progress", %*{"message": "Build completed successfully", "stage": "completed", "exitCode": exitCode})
     
   except Exception as e:
     result.success = false
     result.errorMsg = fmt"Failed to execute nimble build: {e.msg}"
     result.output = ""
-    ctx.info(fmt"Build execution failed: {e.msg}")
+    ctx.sendNotification("progress", %*{"message": fmt"Build execution failed: {e.msg}", "stage": "error"})
 
 proc nimbleTest*(workingDir: string, testFilter: string = ""): NimbleResult =
   ## Run project tests with optional filtering
@@ -191,7 +193,8 @@ proc nimbleTestWithStreaming*(ctx: McpRequestContext, workingDir: string, testFi
       args.add(testFilter)
     
     let fullCommand = "nimble " & args.join(" ")
-    ctx.info(fmt"Starting test execution: {fullCommand}")
+    # Send proper streaming notification instead of just logging
+    ctx.sendNotification("progress", %*{"message": fmt"Starting test execution: {fullCommand}", "stage": "starting"})
     
     # Start the process for streaming output
     let process = startProcess(
@@ -207,8 +210,8 @@ proc nimbleTestWithStreaming*(ctx: McpRequestContext, workingDir: string, testFi
     while readLine(process.outputStream, line):
       outputLines.add(line)
       
-      # Stream the line to the client in real-time
-      ctx.info(line)
+      # Send streaming notification for each line of output
+      ctx.sendNotification("progress", %*{"message": line, "stage": "testing"})
       
       # Check if we should exit early due to cancellation
       if ctx.isCancelled():
@@ -216,6 +219,7 @@ proc nimbleTestWithStreaming*(ctx: McpRequestContext, workingDir: string, testFi
         result.success = false
         result.errorMsg = "Test execution was cancelled"
         result.output = outputLines.join("\n")
+        ctx.sendNotification("progress", %*{"message": "Test execution was cancelled", "stage": "cancelled"})
         return
     
     # Wait for process to complete and get exit code
@@ -227,15 +231,15 @@ proc nimbleTestWithStreaming*(ctx: McpRequestContext, workingDir: string, testFi
     
     if not result.success:
       result.errorMsg = fmt"Nimble test failed with exit code {exitCode}"
-      ctx.info(fmt"Test execution completed with exit code: {exitCode}")
+      ctx.sendNotification("progress", %*{"message": fmt"Test execution completed with exit code: {exitCode}", "stage": "failed", "exitCode": exitCode})
     else:
-      ctx.info("Test execution completed successfully")
+      ctx.sendNotification("progress", %*{"message": "Test execution completed successfully", "stage": "completed", "exitCode": exitCode})
     
   except Exception as e:
     result.success = false
     result.errorMsg = fmt"Failed to execute nimble test: {e.msg}"
     result.output = ""
-    ctx.info(fmt"Test execution failed: {e.msg}")
+    ctx.sendNotification("progress", %*{"message": fmt"Test execution failed: {e.msg}", "stage": "error"})
 
 proc nimbleRun*(workingDir: string, target: string, args: seq[string] = @[]): NimbleResult =
   ## Execute project binary with arguments

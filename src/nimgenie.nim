@@ -1,6 +1,6 @@
 import nimcp
-import std/[json, tables, strutils, os, strformat, mimetypes, base64, options, locks, times, parseopt]
-import configuration, database, indexer, analyzer, nimble, embedding
+import std/[json, tables, strutils, os, strformat, mimetypes, base64, options, locks, times, parseopt, sequtils]
+import configuration, database, indexer, analyzer, nimble, embedding, external_database
 
 type
   NimProject* = object
@@ -343,6 +343,122 @@ Dependency indexing completed:
   except Exception as e:
     return fmt"Dependency indexing failed: {e.msg}"
 
+proc indexProjectDependenciesWithStreaming*(ctx: McpRequestContext, genie: var NimGenie, projectPath: string): string =
+  ## Index all dependencies of the current project with streaming progress updates
+  var dependencyResults: seq[string] = @[]
+  var totalDependencySymbols = 0
+  var successfulDeps = 0
+  var failedDeps: seq[string] = @[]
+  
+  try:
+    ctx.sendNotification("progress", %*{"message": "Getting dependency information...", "stage": "dependency_discovery"})
+    
+    # Get dependency information
+    let dumpResult = nimbleDump(projectPath)
+    if not dumpResult.success:
+      return fmt"Could not get dependency information: {dumpResult.errorMsg}"
+    
+    let dependencyNames = parseDependencyNames(dumpResult.output)
+    if dependencyNames.len == 0:
+      ctx.sendNotification("progress", %*{"message": "No dependencies found to index", "stage": "completed"})
+      return "No dependencies found to index"
+    
+    ctx.sendNotification("progress", %*{
+      "message": fmt"Found {dependencyNames.len} dependencies to index: " & dependencyNames.join(", "), 
+      "stage": "dependency_discovery"
+    })
+    
+    # Index each dependency
+    let totalDeps = dependencyNames.len
+    for i, depName in dependencyNames:
+      ctx.sendNotification("progress", %*{
+        "message": fmt"Processing dependency {i+1}/{totalDeps}: {depName}", 
+        "stage": "dependency_indexing",
+        "progress": float(i) / float(totalDeps) * 100.0
+      })
+      
+      let depPathOpt = resolveDependencyPath(genie, depName)
+      if depPathOpt.isNone():
+        failedDeps.add(fmt"{depName} (path not found)")
+        ctx.sendNotification("progress", %*{"message": fmt"✗ Could not find source path for dependency: {depName}", "stage": "dependency_error"})
+        continue
+      
+      let depPath = depPathOpt.get()
+      ctx.sendNotification("progress", %*{"message": fmt"Found dependency {depName} at: {depPath}", "stage": "dependency_processing"})
+      
+      # Create indexer for the dependency
+      let depIndexer = newIndexer(genie.database, depPath, genie.config)
+      
+      # Index the dependency (but don't clear existing symbols)
+      try:
+        ctx.sendNotification("progress", %*{"message": fmt"Indexing dependency: {depName}", "stage": "dependency_processing"})
+        let nimFiles = depIndexer.findNimFiles()
+        
+        if nimFiles.len == 0:
+          failedDeps.add(fmt"{depName} (no nim files found)")
+          ctx.sendNotification("progress", %*{"message": fmt"✗ No Nim files found for dependency: {depName}", "stage": "dependency_error"})
+          continue
+        
+        ctx.sendNotification("progress", %*{"message": fmt"Found {nimFiles.len} files in {depName}", "stage": "dependency_processing"})
+        
+        var depSymbols = 0
+        var depSuccessCount = 0
+        var depFailureCount = 0
+        
+        # Index each file in the dependency
+        for j, filePath in nimFiles:
+          let fileName = extractFilename(filePath)
+          if j mod 10 == 0: # Update progress every 10 files to avoid spam
+            ctx.sendNotification("progress", %*{
+              "message": fmt"Processing {depName}: file {j+1}/{nimFiles.len}", 
+              "stage": "dependency_file_processing"
+            })
+          
+          let (success, symbolCount) = depIndexer.indexSingleFile(filePath)
+          if success:
+            inc depSuccessCount
+            depSymbols += symbolCount
+          else:
+            inc depFailureCount
+        
+        if depSymbols > 0:
+          inc successfulDeps
+          totalDependencySymbols += depSymbols
+          let depResult = fmt"✓ {depName}: {depSymbols} symbols from {depSuccessCount} files"
+          dependencyResults.add(depResult)
+          ctx.sendNotification("progress", %*{"message": depResult, "stage": "dependency_success"})
+        else:
+          failedDeps.add(fmt"{depName} (no symbols found)")
+          ctx.sendNotification("progress", %*{"message": fmt"✗ No symbols found for dependency: {depName}", "stage": "dependency_error"})
+          
+      except Exception as e:
+        failedDeps.add(fmt"{depName} (error: {e.msg})")
+        ctx.sendNotification("progress", %*{"message": fmt"✗ Error indexing dependency {depName}: {e.msg}", "stage": "dependency_error"})
+    
+    # Build summary
+    var summary = fmt"""
+Dependency indexing completed:
+- Dependencies found: {dependencyNames.len}
+- Successfully indexed: {successfulDeps}
+- Total dependency symbols: {totalDependencySymbols}
+"""
+    
+    if dependencyResults.len > 0:
+      summary.add("\nSuccessfully indexed dependencies:\n")
+      summary.add(dependencyResults.join("\n"))
+    
+    if failedDeps.len > 0:
+      summary.add(fmt"\n\nFailed to index ({failedDeps.len}):\n")
+      summary.add(failedDeps.join("\n"))
+    
+    ctx.sendNotification("progress", %*{"message": "Dependency indexing completed!", "stage": "completed"})
+    return summary
+    
+  except Exception as e:
+    let errorMsg = fmt"Dependency indexing failed: {e.msg}"
+    ctx.sendNotification("progress", %*{"message": errorMsg, "stage": "error"})
+    return errorMsg
+
 proc showVersion() =
   ## Display version information and exit
   echo "NimGenie v0.1.0"
@@ -421,7 +537,15 @@ proc defaultConfig(): Config =
     ollamaHost: getEnv("NIMGENIE_OLLAMA_HOST", "http://localhost:11434"),
     embeddingModel: getEnv("NIMGENIE_EMBEDDING_MODEL", "nomic-embed-text"),
     embeddingBatchSize: parseInt(getEnv("NIMGENIE_EMBEDDING_BATCH_SIZE", "20")),
-    vectorSimilarityThreshold: parseFloat(getEnv("NIMGENIE_VECTOR_SIMILARITY_THRESHOLD", "0.7"))
+    vectorSimilarityThreshold: parseFloat(getEnv("NIMGENIE_VECTOR_SIMILARITY_THRESHOLD", "0.7")),
+    # External database configuration
+    externalDbType: getEnv("DB_TYPE", "mysql"),
+    externalDbHost: getEnv("DB_HOST", "localhost"),
+    externalDbPort: parseInt(getEnv("DB_PORT", "3306")),
+    externalDbUser: getEnv("DB_USER", "root"),
+    externalDbPassword: getEnv("DB_PASSWORD", ""),
+    externalDbDatabase: getEnv("DB_DATABASE", "mysql"),
+    externalDbPoolSize: parseInt(getEnv("DB_POOL_SIZE", "5"))
   )
 
 proc parseCommandLine(): Config =
@@ -506,11 +630,13 @@ let server = mcpServer("nimgenie", "0.1.0"):
   # ============================================================================
 
   mcpTool:
-    proc indexCurrentProject(): string {.gcsafe.} =
+    proc indexCurrentProject(ctx: McpRequestContext): string {.gcsafe.} =
       ## Index the current working directory as a Nim project, including all source files and dependencies.
       ## This performs a comprehensive analysis of both the main project and all its Nimble dependencies,
       ## creating a searchable database of symbols, functions, types, and modules. Use this as the first
       ## step when working with a new Nim project to enable intelligent code search and analysis.
+      ## Provides real-time streaming progress updates so you can monitor indexing progress, especially
+      ## useful for large projects with many dependencies.
       try:
         withGenie:
           # Get or create current project
@@ -523,13 +649,13 @@ let server = mcpServer("nimgenie", "0.1.0"):
             )
           
           # Index the main project first
-          echo "=== Indexing Main Project ==="
+          ctx.sendNotification("progress", %*{"message": "=== Indexing Main Project ===", "stage": "main_project"})
           let indexer = newIndexer(genie.database, currentPath, genie.config)
-          let projectResult = indexer.indexProject()
+          let projectResult = indexer.indexProjectWithStreaming(ctx)
           
           # Index project dependencies
-          echo "\n=== Indexing Project Dependencies ==="
-          let dependencyResult = indexProjectDependencies(genie, currentPath)
+          ctx.sendNotification("progress", %*{"message": "=== Indexing Project Dependencies ===", "stage": "dependencies"})
+          let dependencyResult = indexProjectDependenciesWithStreaming(ctx, genie, currentPath)
           
           # Clear cache after reindexing
           genie.symbolCache.clear()
@@ -549,26 +675,31 @@ Project and all dependencies have been indexed successfully.
 Use searchSymbols to search across all indexed code.
 """
           
+          ctx.sendNotification("progress", %*{"message": "=== Complete Project Indexing Finished ===", "stage": "all_completed"})
           return combinedResult
       except Exception as e:
-        return fmt"Failed to index project: {e.msg}"
+        let errorMsg = fmt"Failed to index project: {e.msg}"
+        ctx.sendNotification("progress", %*{"message": errorMsg, "stage": "error"})
+        return errorMsg
         
   mcpTool:
-    proc indexProjectDependenciesOnly(): string {.gcsafe.} =
+    proc indexProjectDependenciesOnly(ctx: McpRequestContext): string {.gcsafe.} =
       ## Index only the Nimble dependencies of the current project, leaving the main project symbols unchanged.
       ## This is useful when you want to refresh dependency information without re-processing the main project
       ## source files. Use this when dependencies have been updated or when you need dependency symbols
-      ## but the main project is already indexed.
+      ## but the main project is already indexed. Provides real-time streaming progress updates so you can
+      ## monitor dependency indexing progress.
       {.cast(gcsafe).}:
         try:
           withGenie:
             let currentPath = getCurrentDir()
-            echo "=== Indexing Project Dependencies Only ==="
-            let dependencyResult = indexProjectDependencies(genie, currentPath)
+            ctx.sendNotification("progress", %*{"message": "=== Indexing Project Dependencies Only ===", "stage": "dependencies_only"})
+            let dependencyResult = indexProjectDependenciesWithStreaming(ctx, genie, currentPath)
             
             # Clear cache after indexing
             genie.symbolCache.clear()
             
+            ctx.sendNotification("progress", %*{"message": "=== Dependency Indexing Complete ===", "stage": "completed"})
             return fmt"""
 === Dependency Indexing Complete ===
 
@@ -580,7 +711,9 @@ Main project symbols remain unchanged.
 Use searchSymbols to search across all indexed code.
 """
         except Exception as e:
-          return fmt"Failed to index dependencies: {e.msg}"
+          let errorMsg = fmt"Failed to index dependencies: {e.msg}"
+          ctx.sendNotification("progress", %*{"message": errorMsg, "stage": "error"})
+          return errorMsg
         
   mcpTool:
     proc searchSymbols(query: string, symbolType: string = "", moduleName: string = ""): string {.gcsafe.} =
@@ -664,7 +797,7 @@ Use searchSymbols to search across all indexed code.
           if not queryEmbResult.success:
             return fmt"Error generating query embedding: {queryEmbResult.error}"
           
-          let queryEmbedding = embeddingToJson(queryEmbResult.embedding)
+          let queryEmbedding = toTidbVector(queryEmbResult.embedding)
           let results = genie.database.semanticSearchSymbols(queryEmbedding, "", "", limit)
           
           return $results
@@ -691,7 +824,7 @@ Use searchSymbols to search across all indexed code.
         # For now, use placeholder - will be enhanced with actual vector similarity
         let results = block:
           {.cast(gcsafe).}:
-            genie.database.findSimilarByEmbedding("", -1, limit)
+            genie.database.findSimilarByEmbedding(TidbVector(@[]), -1, limit)
         return $results
       except Exception as e:
         return fmt"Failed to find similar symbols: {e.msg}"
@@ -720,7 +853,7 @@ Use searchSymbols to search across all indexed code.
         if not snippetEmbResult.success:
           return fmt"Error generating code embedding: {snippetEmbResult.error}"
         
-        let snippetEmbedding = embeddingToJson(snippetEmbResult.embedding)
+        let snippetEmbedding = toTidbVector(snippetEmbResult.embedding)
         let results = block:
           {.cast(gcsafe).}:
             genie.database.findSimilarByEmbedding(snippetEmbedding, -1, limit)
@@ -754,7 +887,7 @@ Use searchSymbols to search across all indexed code.
         if not conceptEmbResult.success:
           return fmt"Error generating concept embedding: {conceptEmbResult.error}"
         
-        let conceptEmbedding = embeddingToJson(conceptEmbResult.embedding)
+        let conceptEmbedding = toTidbVector(conceptEmbResult.embedding)
         let results = block:
           {.cast(gcsafe).}:
             genie.database.semanticSearchSymbols(conceptEmbedding, "", "", limit)
@@ -768,25 +901,42 @@ Use searchSymbols to search across all indexed code.
   # ============================================================================
         
   mcpTool:
-    proc generateEmbeddings(symbolTypes: string = "", modules: string = ""): string {.gcsafe.} =
+    proc generateEmbeddings(ctx: McpRequestContext, symbolTypes: string = "", modules: string = ""): string {.gcsafe.} =
       ## Generate or refresh vector embeddings for symbols in the database. Can be scoped
       ## to specific symbol types or modules. This is automatically called during indexing
       ## but can be run manually to update embeddings or use different embedding models.
+      ## Provides real-time streaming progress updates so you can monitor embedding generation progress.
       ## - symbolTypes: Comma-separated list of symbol types to process (e.g., "proc,type,const")
       ## - modules: Comma-separated list of modules to process (if empty, processes all modules)
       try:
+        ctx.sendNotification("progress", %*{"message": "Initializing embedding generation...", "stage": "embedding_init"})
+        
         # Database operation (no locks needed - database is thread-safe)
         # Create embedding generator
         let embeddingGen = block:
           {.cast(gcsafe).}:
             newEmbeddingGenerator(genie.config)
-        if not embeddingGen.available:
-          return "Error: Ollama not available. Please ensure Ollama is running with an embedding model."
         
-        # This would need to be implemented to regenerate embeddings for existing symbols
+        if not embeddingGen.available:
+          let errorMsg = "Error: Ollama not available. Please ensure Ollama is running with an embedding model."
+          ctx.sendNotification("progress", %*{"message": errorMsg, "stage": "error"})
+          return errorMsg
+        
+        ctx.sendNotification("progress", %*{"message": "Embedding generator initialized successfully", "stage": "embedding_ready"})
+        
+        # TODO: This would need to be implemented to regenerate embeddings for existing symbols
+        # Future implementation would:
+        # 1. Query symbols based on symbolTypes and modules filters
+        # 2. Process each symbol batch with progress updates
+        # 3. Generate embeddings and store in database
+        # 4. Provide detailed progress feedback
+        
+        ctx.sendNotification("progress", %*{"message": "Embedding generation feature is not fully implemented yet", "stage": "not_implemented"})
         return "Embedding generation started. This feature is not fully implemented yet."
       except Exception as e:
-        return fmt"Failed to generate embeddings: {e.msg}"
+        let errorMsg = fmt"Failed to generate embeddings: {e.msg}"
+        ctx.sendNotification("progress", %*{"message": errorMsg, "stage": "error"})
+        return errorMsg
         
   mcpTool:
     proc getEmbeddingStats(): string {.gcsafe.} =
@@ -928,18 +1078,23 @@ Use searchSymbols to search across all indexed code.
         return fmt"Error listing Nimble packages: {e.msg}"
 
   mcpTool:
-    proc indexNimblePackage(packageName: string): string {.gcsafe.} =
+    proc indexNimblePackage(ctx: McpRequestContext, packageName: string): string {.gcsafe.} =
       ## Index a specific Nimble package, analyzing its source code and adding its symbols
       ## to the searchable database. Use this to make a package's APIs and implementation
       ## available for search and analysis. Required before you can search for symbols in a package.
+      ## Provides real-time streaming progress updates so you can monitor package indexing progress.
       ## - packageName: Name of the Nimble package to index (must be from the discovered packages list)
       try:
+        ctx.sendNotification("progress", %*{"message": fmt"Starting indexing of Nimble package '{packageName}'", "stage": "package_init"})
+        
         # First check if package exists (nimble packages access)
         var packagePath: string
         withNimblePackages:
           if packageName notin genie.nimblePackages:
             return fmt"Package '{packageName}' not found in discovered Nimble packages"
           packagePath = genie.nimblePackages[packageName]
+        
+        ctx.sendNotification("progress", %*{"message": fmt"Found package '{packageName}' at: {packagePath}", "stage": "package_found"})
         
         # Create a project entry for this package if it doesn't exist (projects access)
         withProjects:
@@ -951,18 +1106,22 @@ Use searchSymbols to search across all indexed code.
             )
         
         # Database operation (no locks needed - database is thread-safe)
+        ctx.sendNotification("progress", %*{"message": fmt"Starting indexing of package files...", "stage": "package_indexing"})
         let indexer = block:
           {.cast(gcsafe).}:
             newIndexer(genie.database, packagePath, genie.config)
-        let indexResult = indexer.indexProject()
+        let indexResult = indexer.indexProjectWithStreaming(ctx)
         
         # Clear cache after reindexing (symbol cache access)
         withSymbolCache:
           genie.symbolCache.clear()
         
+        ctx.sendNotification("progress", %*{"message": fmt"Successfully indexed Nimble package '{packageName}'", "stage": "package_completed"})
         return fmt"Successfully indexed Nimble package '{packageName}': {indexResult}"
       except Exception as e:
-        return fmt"Failed to index Nimble package '{packageName}': {e.msg}"
+        let errorMsg = fmt"Failed to index Nimble package '{packageName}': {e.msg}"
+        ctx.sendNotification("progress", %*{"message": errorMsg, "stage": "error"})
+        return errorMsg
 
   # ============================================================================
   # PACKAGE MANAGEMENT TOOLS
@@ -1276,6 +1435,226 @@ Use searchSymbols to search across all indexed code.
       except Exception as e:
         return fmt"Failed to get project status: {e.msg}"
 
+  # ============================================================================
+  # EXTERNAL DATABASE TOOLS
+  # Tools for connecting to and querying external MySQL, TiDB, and PostgreSQL databases
+  # ============================================================================
+
+  mcpTool:
+    proc dbConnect(dbType: string, host: string = "", port: int = 0, user: string = "", password: string = "", database: string = ""): string {.gcsafe.} =
+      ## Connect to an external database (MySQL, TiDB, or PostgreSQL). Establishes a persistent 
+      ## connection pool that can be used for subsequent queries. Use this before executing any
+      ## database operations to set up the connection with the target database.
+      ## - dbType: Database type ("mysql", "tidb", "postgresql")
+      ## - host: Database server hostname or IP address (default: localhost)
+      ## - port: Database server port (default: 3306 for MySQL/TiDB, 5432 for PostgreSQL)
+      ## - user: Database username (default: root for MySQL/TiDB, postgres for PostgreSQL)
+      ## - password: Database password (default: empty)
+      ## - database: Database name to connect to (default: database-type specific defaults)
+      {.cast(gcsafe).}:
+        try:
+          # Create configuration from parameters
+          var config = genie.config
+          if dbType != "": config.externalDbType = dbType
+          if host != "": config.externalDbHost = host
+          if port != 0: config.externalDbPort = port
+          if user != "": config.externalDbUser = user
+          if password != "": config.externalDbPassword = password
+          if database != "": config.externalDbDatabase = database
+          
+          if connectExternalDb(config):
+            let status = getConnectionStatus()
+            return fmt"Successfully connected to {dbType} database: {$status}"
+          else:
+            return fmt"Failed to connect to {dbType} database"
+        except Exception as e:
+          return fmt"Connection failed: {e.msg}"
+
+  mcpTool:
+    proc dbQuery(sql: string, params: string = ""): string {.gcsafe.} =
+      ## Execute a SELECT query on the connected external database and return results in JSON format.
+      ## Supports parameterized queries for security. Use this for retrieving data from database tables,
+      ## views, or executing complex analytical queries.
+      ## - sql: SQL SELECT statement to execute (supports ? placeholders for parameters)
+      ## - params: Comma-separated parameter values for placeholders in the query (optional)
+      {.cast(gcsafe).}:
+        try:
+          if not isConnected():
+            return "Error: Not connected to external database. Use dbConnect first."
+          
+          let paramList = if params == "": @[] else: params.split(",").mapIt(it.strip())
+          let queryResult = executeExternalQuery(sql, paramList)
+          return $formatQueryResult(queryResult)
+        except Exception as e:
+          return fmt"Query failed: {e.msg}"
+
+  mcpTool:
+    proc dbExecute(sql: string, params: string = ""): string {.gcsafe.} =
+      ## Execute an INSERT, UPDATE, or DELETE statement on the connected external database.
+      ## Returns information about affected rows. Supports parameterized queries for security.
+      ## Use this for modifying data in database tables.
+      ## - sql: SQL INSERT/UPDATE/DELETE statement to execute (supports ? placeholders for parameters)
+      ## - params: Comma-separated parameter values for placeholders in the query (optional)
+      {.cast(gcsafe).}:
+        try:
+          if not isConnected():
+            return "Error: Not connected to external database. Use dbConnect first."
+          
+          let paramList = if params == "": @[] else: params.split(",").mapIt(it.strip())
+          let execResult = executeExternalQuery(sql, paramList)
+          return $formatQueryResult(execResult)
+        except Exception as e:
+          return fmt"Execute failed: {e.msg}"
+
+  mcpTool:
+    proc dbTransaction(sqlStatements: string): string {.gcsafe.} =
+      ## Execute multiple SQL statements within a single database transaction. All statements
+      ## must succeed or the entire transaction will be rolled back. Use this for operations
+      ## that require atomicity across multiple database changes.
+      ## - sqlStatements: Semicolon-separated list of SQL statements to execute in transaction
+      {.cast(gcsafe).}:
+        try:
+          if not isConnected():
+            return "Error: Not connected to external database. Use dbConnect first."
+          
+          let statements = sqlStatements.split(";").mapIt(it.strip()).filter(proc(x: string): bool = x.len > 0)
+          let transResult = executeExternalTransaction(statements)
+          return $formatQueryResult(transResult)
+        except Exception as e:
+          return fmt"Transaction failed: {e.msg}"
+
+  mcpTool:
+    proc dbListDatabases(): string {.gcsafe.} =
+      ## List all databases available on the connected database server. Shows database names
+      ## that you have permission to access. Use this to explore available databases and
+      ## verify connectivity to the database server.
+      {.cast(gcsafe).}:
+        try:
+          if not isConnected():
+            return "Error: Not connected to external database. Use dbConnect first."
+          
+          let status = getConnectionStatus()
+          let dbType = parseDbType(status["database_type"].getStr())
+          let query = getDatabaseIntrospectionQuery("list_databases", dbType)
+          let dbResult = executeExternalQuery(query)
+          return $formatQueryResult(dbResult)
+        except Exception as e:
+          return fmt"Failed to list databases: {e.msg}"
+
+  mcpTool:
+    proc dbListTables(database: string = ""): string {.gcsafe.} =
+      ## List all tables in the specified database or current database. Shows table names
+      ## and basic information about each table. Use this to explore database schema and
+      ## identify available tables for querying.
+      ## - database: Database name to list tables from (optional, uses current database if not specified)
+      {.cast(gcsafe).}:
+        try:
+          if not isConnected():
+            return "Error: Not connected to external database. Use dbConnect first."
+          
+          let status = getConnectionStatus()
+          let dbType = parseDbType(status["database_type"].getStr())
+          let query = getDatabaseIntrospectionQuery("list_tables", dbType)
+          let dbResult = executeExternalQuery(query)
+          return $formatQueryResult(dbResult)
+        except Exception as e:
+          return fmt"Failed to list tables: {e.msg}"
+
+  mcpTool:
+    proc dbDescribeTable(tableName: string): string {.gcsafe.} =
+      ## Get detailed schema information about a specific table including column names, data types,
+      ## constraints, and other metadata. Use this to understand table structure before writing
+      ## queries or to generate appropriate INSERT/UPDATE statements.
+      ## - tableName: Name of the table to describe
+      {.cast(gcsafe).}:
+        try:
+          if not isConnected():
+            return "Error: Not connected to external database. Use dbConnect first."
+          
+          if tableName == "":
+            return "Error: Table name is required"
+          
+          let status = getConnectionStatus()
+          let dbType = parseDbType(status["database_type"].getStr())
+          let queryTemplate = getDatabaseIntrospectionQuery("describe_table", dbType)
+          let query = queryTemplate.replace("{table}", tableName)
+          let dbResult = executeExternalQuery(query)
+          return $formatQueryResult(dbResult)
+        except Exception as e:
+          return fmt"Failed to describe table: {e.msg}"
+
+  mcpTool:
+    proc dbShowIndexes(tableName: string): string {.gcsafe.} =
+      ## Show all indexes defined on a specific table including primary keys, unique constraints,
+      ## and performance indexes. Use this to understand query optimization opportunities and
+      ## table constraints that may affect INSERT/UPDATE operations.
+      ## - tableName: Name of the table to show indexes for
+      {.cast(gcsafe).}:
+        try:
+          if not isConnected():
+            return "Error: Not connected to external database. Use dbConnect first."
+          
+          if tableName == "":
+            return "Error: Table name is required"
+          
+          let status = getConnectionStatus()
+          let dbType = parseDbType(status["database_type"].getStr())
+          let queryTemplate = getDatabaseIntrospectionQuery("show_indexes", dbType)
+          let query = queryTemplate.replace("{table}", tableName)
+          let dbResult = executeExternalQuery(query)
+          return $formatQueryResult(dbResult)
+        except Exception as e:
+          return fmt"Failed to show indexes: {e.msg}"
+
+  mcpTool:
+    proc dbStatus(): string {.gcsafe.} =
+      ## Check the connection status and display information about the current database connection
+      ## including database type, host, port, database name, and connection health. Use this to
+      ## verify connectivity and troubleshoot connection issues.
+      try:
+        let status = getConnectionStatus()
+        return $status
+      except Exception as e:
+        return fmt"Failed to get database status: {e.msg}"
+
+  mcpTool:
+    proc dbDisconnect(): string {.gcsafe.} =
+      ## Close the connection to the external database and free associated resources.
+      ## Use this to cleanly disconnect when database operations are complete or to
+      ## reset the connection before connecting to a different database.
+      try:
+        disconnectExternalDb()
+        return "Successfully disconnected from external database"
+      except Exception as e:
+        return fmt"Failed to disconnect: {e.msg}"
+
+  mcpTool:
+    proc dbExplainQuery(sql: string): string {.gcsafe.} =
+      ## Get the query execution plan for a SQL statement without executing it. Shows how the
+      ## database engine will process the query, including table scans, index usage, and join
+      ## strategies. Use this to optimize query performance and understand execution costs.
+      ## - sql: SQL statement to analyze (typically a SELECT statement)
+      {.cast(gcsafe).}:
+        try:
+          if not isConnected():
+            return "Error: Not connected to external database. Use dbConnect first."
+        
+          if sql == "":
+            return "Error: SQL statement is required"
+          
+          let status = getConnectionStatus()
+          let dbType = parseDbType(status["database_type"].getStr())
+          let explainQuery = case dbType:
+          of MySQL, TiDB:
+            fmt"EXPLAIN {sql}"
+          of PostgreSQL:
+            fmt"EXPLAIN ANALYZE {sql}"
+          
+          let res = executeExternalQuery(explainQuery)
+          return $formatQueryResult(res)
+        except Exception as e:
+          return fmt"Failed to explain query: {e.msg}"
+
 proc handleFileResource(ctx: McpRequestContext, uri: string, params: Table[string, string]): McpResourceContents {.gcsafe.} =
   ## Handle file resource requests from registered directories
   let dirIndex = params.getOrDefault("dirIndex", "0").parseInt()
@@ -1438,6 +1817,7 @@ when isMainModule:
   initLock(symbolCacheLock)
   initLock(registeredDirsLock)
   initLock(genieLock)  # Legacy - to be removed
+  initExternalDbLock()  # Initialize external database lock
   
   # Parse command line arguments
   var config = parseCommandLine()

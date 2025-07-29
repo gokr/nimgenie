@@ -1,4 +1,5 @@
 import std/[json, os, strutils, strformat, times, options]
+import nimcp
 import database
 import analyzer
 import embedding
@@ -434,6 +435,118 @@ Project indexing completed:
     
   except Exception as e:
     let errorMsg = fmt"Project indexing failed: {e.msg}"
+    echo errorMsg
+    return errorMsg
+
+proc indexProjectWithStreaming*(indexer: Indexer, ctx: McpRequestContext): string =
+  ## Index the entire project using dependency analysis with streaming progress updates
+  try:
+    ctx.sendNotification("progress", %*{"message": fmt"Starting project indexing for: {indexer.projectPath}", "stage": "starting"})
+    
+    # Clear existing symbols for this project
+    ctx.sendNotification("progress", %*{"message": "Clearing existing symbols...", "stage": "cleanup"})
+    indexer.database.clearSymbols()
+    
+    # Find all Nim files
+    ctx.sendNotification("progress", %*{"message": "Discovering Nim files...", "stage": "discovery"})
+    let nimFiles = indexer.findNimFiles()
+    ctx.sendNotification("progress", %*{"message": fmt"Found {nimFiles.len} Nim files", "stage": "discovery"})
+    
+    if nimFiles.len == 0:
+      return "No Nim files found in project"
+    
+    var totalSymbols = 0
+    var successCount = 0
+    var failureCount = 0
+    
+    # First, parse and store dependencies if enabled in configuration
+    if indexer.config.enableDependencyTracking:
+      ctx.sendNotification("progress", %*{"message": "Parsing and storing dependencies...", "stage": "dependencies"})
+      if not parseAndStoreDependencies(indexer):
+        ctx.sendNotification("progress", %*{"message": "Warning: Failed to store dependencies", "stage": "warning"})
+    
+    # Index each file and track modifications
+    let totalFiles = nimFiles.len
+    for i, filePath in nimFiles:
+      let fileName = extractFilename(filePath)
+      ctx.sendNotification("progress", %*{
+        "message": fmt"Processing file {i+1}/{totalFiles}: {fileName}", 
+        "stage": "indexing",
+        "progress": float(i) / float(totalFiles) * 100.0
+      })
+      
+      # Get file modification info
+      let fileInfo = getFileSize(filePath)
+      let modTime = getLastModificationTime(filePath).utc
+      let fileHash = "" # In a real implementation, we'd calculate a hash of the file content
+      
+      # Store file modification info
+      if not indexer.database.insertFileModification(filePath, modTime, int(fileInfo), fileHash):
+        ctx.sendNotification("progress", %*{"message": fmt"Warning: Failed to store modification info for {fileName}", "stage": "warning"})
+      
+      let (success, symbolCount) = indexer.indexSingleFile(filePath)
+      if success:
+        inc successCount
+        totalSymbols += symbolCount
+        when not defined(testing):
+          ctx.sendNotification("progress", %*{"message": fmt"✓ {fileName}: {symbolCount} symbols", "stage": "file_success"})
+      else:
+        inc failureCount
+        ctx.sendNotification("progress", %*{"message": fmt"✗ Failed to index {fileName}", "stage": "file_error"})
+    
+    # Try project-wide indexing as well - look for a main nim file
+    ctx.sendNotification("progress", %*{"message": "Attempting project-wide indexing...", "stage": "project_wide"})
+    
+    # Find a suitable main nim file for project indexing
+    var mainFile = ""
+    
+    # Look for common main file patterns
+    let possibleMainFiles = [
+      indexer.projectPath / (extractFilename(indexer.projectPath) & ".nim"),
+      indexer.projectPath / "src" / (extractFilename(indexer.projectPath) & ".nim"),
+      indexer.projectPath / "main.nim",
+      indexer.projectPath / "src" / "main.nim"
+    ]
+    
+    for candidate in possibleMainFiles:
+      if fileExists(candidate):
+        mainFile = candidate
+        break
+    
+    # If no main file found, just skip project-wide indexing
+    if mainFile == "":
+      ctx.sendNotification("progress", %*{"message": "No main file found for project-wide indexing, skipping...", "stage": "project_wide"})
+    else:
+      ctx.sendNotification("progress", %*{"message": fmt"Running project-wide indexing on {extractFilename(mainFile)}...", "stage": "project_wide"})
+      let projectResult = indexer.analyzer.execNimCommand("doc", @["--index:on", "--project", mainFile])
+      
+      if projectResult.exitCode == 0:
+        ctx.sendNotification("progress", %*{"message": "✓ Project-wide indexing completed", "stage": "project_wide"})
+        
+        # Look for generated .idx files
+        for kind, path in walkDir(indexer.projectPath):
+          if kind == pcFile and path.endsWith(".idx"):
+            let idxSymbols = indexer.parseNimIdxFile(path)
+            if idxSymbols > 0:
+              totalSymbols += idxSymbols
+              ctx.sendNotification("progress", %*{"message": fmt"✓ Processed {extractFilename(path)}: {idxSymbols} symbols", "stage": "project_wide"})
+      else:
+        ctx.sendNotification("progress", %*{"message": fmt"Project-wide indexing failed: {projectResult.output}", "stage": "project_wide_error"})
+    
+    let summary = fmt"""
+Project indexing completed:
+- Files processed: {successCount}/{nimFiles.len}
+- Total symbols indexed: {totalSymbols}
+- Failures: {failureCount}
+"""
+    
+    ctx.sendNotification("progress", %*{"message": "Project indexing completed successfully!", "stage": "completed"})
+    echo summary
+    return summary
+    
+  except Exception as e:
+    let errorMsg = fmt"Project indexing failed: {e.msg}"
+    ctx.sendNotification("progress", %*{"message": errorMsg, "stage": "error"})
     echo errorMsg
     return errorMsg
 

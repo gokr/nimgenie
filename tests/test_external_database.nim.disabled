@@ -1,0 +1,350 @@
+import std/[unittest, json, strutils, os, times]
+import ../src/external_database, ../src/configuration
+
+# Test utilities
+proc createTestConfig(dbType: string): Config =
+  ## Create a test configuration for the specified database type
+  result = Config()
+  result.externalDbType = dbType
+  result.externalDbHost = "localhost"
+  result.externalDbPort = case dbType:
+    of "mysql", "tidb": 3306
+    of "postgresql": 5432
+    else: 3306
+  result.externalDbUser = case dbType:
+    of "mysql", "tidb": "root"
+    of "postgresql": "postgres"
+    else: "root"
+  result.externalDbPassword = ""
+  result.externalDbDatabase = case dbType:
+    of "mysql": "mysql"
+    of "tidb": "test"
+    of "postgresql": "postgres"
+    else: "mysql"
+  result.externalDbPoolSize = 3
+
+proc isDbAvailable(config: Config): bool =
+  ## Test if a database is available for testing
+  try:
+    initExternalDbLock()
+    let connected = connectExternalDb(config)
+    if connected:
+      disconnectExternalDb()
+    return connected
+  except:
+    return false
+
+# Database type parsing tests
+suite "Database Type Parsing":
+  test "parseDbType with valid types":
+    check parseDbType("mysql") == MySQL
+    check parseDbType("tidb") == TiDB  
+    check parseDbType("postgresql") == PostgreSQL
+    check parseDbType("postgres") == PostgreSQL
+    check parseDbType("MYSQL") == MySQL
+    check parseDbType("TiDB") == TiDB
+
+  test "parseDbType with invalid type":
+    expect(ValueError):
+      discard parseDbType("invalid")
+
+  test "getDefaultPort":
+    check getDefaultPort(MySQL) == 3306
+    check getDefaultPort(TiDB) == 3306
+    check getDefaultPort(PostgreSQL) == 5432
+
+  test "getDefaultUser":
+    check getDefaultUser(MySQL) == "root"
+    check getDefaultUser(TiDB) == "root"
+    check getDefaultUser(PostgreSQL) == "postgres"
+
+  test "getDefaultDatabase":
+    check getDefaultDatabase(MySQL) == "mysql"
+    check getDefaultDatabase(TiDB) == "test"
+    check getDefaultDatabase(PostgreSQL) == "postgres"
+
+# Configuration tests
+suite "External Database Configuration":
+  test "createExternalDbConfig with MySQL":
+    let config = createTestConfig("mysql")
+    let dbConfig = createExternalDbConfig(config)
+    
+    check dbConfig.dbType == MySQL
+    check dbConfig.host == "localhost"
+    check dbConfig.port == 3306
+    check dbConfig.user == "root"
+    check dbConfig.database == "mysql"
+    check dbConfig.poolSize == 3
+
+  test "createExternalDbConfig with PostgreSQL":
+    let config = createTestConfig("postgresql")
+    let dbConfig = createExternalDbConfig(config)
+    
+    check dbConfig.dbType == PostgreSQL
+    check dbConfig.host == "localhost"
+    check dbConfig.port == 5432
+    check dbConfig.user == "postgres"
+    check dbConfig.database == "postgres"
+    check dbConfig.poolSize == 3
+
+  test "createExternalDbConfig with TiDB":
+    let config = createTestConfig("tidb")
+    let dbConfig = createExternalDbConfig(config)
+    
+    check dbConfig.dbType == TiDB
+    check dbConfig.host == "localhost"
+    check dbConfig.port == 3306
+    check dbConfig.user == "root"
+    check dbConfig.database == "test"
+    check dbConfig.poolSize == 3
+
+# Query adaptation tests
+suite "Query Adaptation":
+  test "adaptQueryForDatabase with MySQL":
+    let sql = """SELECT "column_name" FROM information_schema.columns WHERE table_name = "test""""
+    let adapted = adaptQueryForDatabase(sql, MySQL)
+    check adapted == """SELECT `column_name` FROM information_schema.columns WHERE table_name = `test`"""
+
+  test "adaptQueryForDatabase with PostgreSQL":
+    let sql = """SELECT `column_name` FROM information_schema.columns WHERE table_name = `test`"""
+    let adapted = adaptQueryForDatabase(sql, PostgreSQL)
+    check adapted == """SELECT "column_name" FROM information_schema.columns WHERE table_name = "test""""
+
+  test "adaptQueryForDatabase with TiDB":
+    let sql = """SELECT "column_name" FROM information_schema.columns WHERE table_name = "test""""
+    let adapted = adaptQueryForDatabase(sql, TiDB)
+    check adapted == """SELECT `column_name` FROM information_schema.columns WHERE table_name = `test`"""
+
+# Introspection query tests
+suite "Database Introspection Queries":
+  test "MySQL introspection queries":
+    check getDatabaseIntrospectionQuery("list_databases", MySQL) == "SHOW DATABASES"
+    check getDatabaseIntrospectionQuery("list_tables", MySQL) == "SHOW TABLES"
+    check getDatabaseIntrospectionQuery("describe_table", MySQL) == "DESCRIBE `{table}`"
+    check getDatabaseIntrospectionQuery("show_indexes", MySQL) == "SHOW INDEXES FROM `{table}`"
+
+  test "TiDB introspection queries (same as MySQL)":
+    check getDatabaseIntrospectionQuery("list_databases", TiDB) == "SHOW DATABASES"
+    check getDatabaseIntrospectionQuery("list_tables", TiDB) == "SHOW TABLES"
+    check getDatabaseIntrospectionQuery("describe_table", TiDB) == "DESCRIBE `{table}`"
+    check getDatabaseIntrospectionQuery("show_indexes", TiDB) == "SHOW INDEXES FROM `{table}`"
+
+  test "PostgreSQL introspection queries":
+    check getDatabaseIntrospectionQuery("list_databases", PostgreSQL) == "SELECT datname FROM pg_database WHERE datistemplate = false"
+    check getDatabaseIntrospectionQuery("list_tables", PostgreSQL) == "SELECT tablename FROM pg_tables WHERE schemaname = 'public'"
+    let expectedDescribe = """SELECT column_name, data_type, is_nullable, column_default 
+         FROM information_schema.columns 
+         WHERE table_name = '{table}' 
+         ORDER BY ordinal_position"""
+    check getDatabaseIntrospectionQuery("describe_table", PostgreSQL) == expectedDescribe
+
+  test "Invalid query type":
+    expect(ValueError):
+      discard getDatabaseIntrospectionQuery("invalid_query", MySQL)
+
+# Connection status tests
+suite "Connection Management":
+  test "getConnectionStatus when not connected":
+    initExternalDbLock()
+    # Make sure we're disconnected
+    disconnectExternalDb()
+    
+    let status = getConnectionStatus()
+    check status["connected"].getBool() == false
+    check status.hasKey("error")
+
+  test "isConnected when not connected":
+    initExternalDbLock()
+    disconnectExternalDb()
+    check isConnected() == false
+
+# Query result formatting tests
+suite "Query Result Formatting":
+  test "formatQueryResult with successful result":
+    var result = QueryResult()
+    result.success = true
+    result.rows = @[@["col1", "col2"], @["val1", "val2"]]
+    result.affectedRows = 0
+    result.executionTimeMs = 50
+    result.columns = @["column1", "column2"]
+    result.rowCount = 2
+    result.error = ""
+    result.queryMetadata = %*{"database_type": "mysql", "query_type": "SELECT"}
+    
+    let formatted = formatQueryResult(result)
+    check formatted["success"].getBool() == true
+    check formatted["database_type"].getStr() == "mysql"
+    check formatted["row_count"].getInt() == 2
+    check formatted["execution_time_ms"].getInt() == 50
+    check formatted["error"].kind == JNull
+
+  test "formatQueryResult with error":
+    var result = QueryResult()
+    result.success = false
+    result.error = "Connection failed"
+    result.executionTimeMs = 10
+    result.queryMetadata = %*{"database_type": "postgresql"}
+    
+    let formatted = formatQueryResult(result)
+    check formatted["success"].getBool() == false
+    check formatted["error"].getStr() == "Connection failed"
+    check formatted["database_type"].getStr() == "postgresql"
+
+# Integration tests (conditional on database availability)
+suite "Database Integration Tests":
+  # Skip integration tests if databases are not available
+  var mysqlAvailable = false
+  var postgresAvailable = false
+  
+  setup:
+    initExternalDbLock()
+    mysqlAvailable = isDbAvailable(createTestConfig("mysql"))
+    postgresAvailable = isDbAvailable(createTestConfig("postgresql"))
+    
+    if not (mysqlAvailable or postgresAvailable):
+      echo "Skipping integration tests - no test databases available"
+      echo "To run integration tests, ensure MySQL and/or PostgreSQL are running:"
+      echo "  MySQL: docker run -d --name test-mysql -e MYSQL_ALLOW_EMPTY_PASSWORD=yes -p 3306:3306 mysql:8.0"
+      echo "  PostgreSQL: docker run -d --name test-postgres -e POSTGRES_HOST_AUTH_METHOD=trust -p 5432:5432 postgres:15"
+
+  test "MySQL connection and basic query":
+    if not isDbAvailable(createTestConfig("mysql")):
+      skip()
+    
+    let config = createTestConfig("mysql")
+    check connectExternalDb(config) == true
+    check isConnected() == true
+    
+    # Test connection status
+    let status = getConnectionStatus()
+    check status["connected"].getBool() == true
+    check status["database_type"].getStr() == "mysql"
+    
+    # Test basic query
+    let result = executeExternalQuery("SELECT 1 as test_column")
+    check result.success == true
+    check result.rows.len > 0
+    check result.rows[0][0] == "1"
+    
+    disconnectExternalDb()
+    check isConnected() == false
+
+  test "PostgreSQL connection and basic query":
+    if not postgresAvailable:
+      skip()
+    
+    let config = createTestConfig("postgresql")
+    check connectExternalDb(config) == true
+    check isConnected() == true
+    
+    # Test connection status
+    let status = getConnectionStatus()
+    check status["connected"].getBool() == true
+    check status["database_type"].getStr() == "postgresql"
+    
+    # Test basic query
+    let result = executeExternalQuery("SELECT 1 as test_column")
+    check result.success == true
+    check result.rows.len > 0
+    check result.rows[0][0] == "1"
+    
+    disconnectExternalDb()
+    check isConnected() == false
+
+  test "Query with parameters":
+    if not isDbAvailable(createTestConfig("mysql")):
+      skip()
+    
+    let config = createTestConfig("mysql")
+    check connectExternalDb(config) == true
+    
+    # Test parameterized query
+    let result = executeExternalQuery("SELECT ? as param_test", @["test_value"])
+    check result.success == true
+    check result.rows.len > 0
+    check result.rows[0][0] == "test_value"
+    
+    disconnectExternalDb()
+
+  test "Database introspection":
+    if not isDbAvailable(createTestConfig("mysql")):
+      skip()
+    
+    let config = createTestConfig("mysql")
+    check connectExternalDb(config) == true
+    
+    # Test database listing
+    let dbResult = executeExternalQuery("SHOW DATABASES")
+    check dbResult.success == true
+    check dbResult.rows.len > 0
+    
+    # Should find at least the 'mysql' database
+    var foundMysqlDb = false
+    for row in dbResult.rows:
+      if row.len > 0 and row[0] == "mysql":
+        foundMysqlDb = true
+        break
+    check foundMysqlDb == true
+    
+    disconnectExternalDb()
+
+  test "Transaction execution":
+    if not isDbAvailable(createTestConfig("mysql")):
+      skip()
+    
+    let config = createTestConfig("mysql")
+    check connectExternalDb(config) == true
+    
+    # Test transaction (using a simple select since we don't want to modify the test database)
+    let statements = @["SELECT 1", "SELECT 2"]
+    let result = executeExternalTransaction(statements)
+    check result.success == true
+    
+    disconnectExternalDb()
+
+  test "Error handling for invalid query":
+    if not isDbAvailable(createTestConfig("mysql")):
+      skip()
+    
+    let config = createTestConfig("mysql")
+    check connectExternalDb(config) == true
+    
+    # Test invalid query
+    let result = executeExternalQuery("INVALID SQL SYNTAX")
+    check result.success == false
+    check result.error != ""
+    
+    disconnectExternalDb()
+
+  test "Query without connection":
+    disconnectExternalDb()
+    check isConnected() == false
+    
+    let result = executeExternalQuery("SELECT 1")
+    check result.success == false
+    check "Not connected" in result.error
+
+# Performance and stress tests
+suite "Performance Tests":
+  test "Multiple quick connections":
+    if not isDbAvailable(createTestConfig("mysql")):
+      skip()
+    
+    let config = createTestConfig("mysql")
+    
+    # Test multiple connect/disconnect cycles, but gracefully handle failures
+    for i in 1..5:
+      if connectExternalDb(config):
+        check isConnected() == true
+        disconnectExternalDb()
+        check isConnected() == false
+      else:
+        # If any connection fails, skip the rest
+        skip()
+
+when isMainModule:
+  # Set up test environment
+  echo "Running external database tests..."
+  echo "Note: Integration tests require MySQL and/or PostgreSQL to be running"
+  echo ""
+  
