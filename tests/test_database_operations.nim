@@ -115,10 +115,10 @@ suite "Symbol Storage and Retrieval Tests":
     
     # Verify all results have correct type
     for symbol in procResults:
-      check symbol["type"].getStr() == "proc"
+      check symbol["symbol_type"].getStr() == "proc"
     
     for symbol in typeResults:
-      check symbol["type"].getStr() == "type"
+      check symbol["symbol_type"].getStr() == "type"
 
   test "Search symbols by module":
     # Insert symbols in different modules

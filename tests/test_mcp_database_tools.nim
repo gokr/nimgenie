@@ -1,4 +1,4 @@
-import std/[unittest, json, strutils, os]
+import std/[unittest, json, strutils, os, osproc, strformat]
 import ../src/configuration, ../src/external_database
 
 # Test utilities for MCP tool testing - these mirror the MCP tool functionality
@@ -74,18 +74,27 @@ proc testDbListTables(database: string = ""): string =
   let jsonResult = formatQueryResult(queryResult)
   return $jsonResult
 
-proc isTestDbAvailable(): bool =
+proc ensureDatabaseExists(config: Config) =
+  ## Create the database first using mysql command
+  let createDbResult = execCmd(fmt"mysql -h127.0.0.1 -P3306 -uroot -e 'CREATE DATABASE IF NOT EXISTS `test`;' --silent")
+  if createDbResult != 0:
+    echo fmt"Warning: Could not create test database!"
+    quit(1)
+
+proc createConfig(): Config =
   ## Check if test database is available for integration tests
-  let config = Config(
+  Config(
     externalDbType: "mysql",
-    externalDbHost: "localhost",
+    externalDbHost: "127.0.0.1",
     externalDbPort: 3306,
     externalDbUser: "root",
     externalDbPassword: "",
     externalDbDatabase: "test",
     externalDbPoolSize: 1
   )
-  return connectExternalDb(config)
+
+# Do this first
+ensureDatabaseExists(createConfig())
 
 suite "MCP Database Tool Tests":
   
@@ -96,14 +105,10 @@ suite "MCP Database Tool Tests":
     disconnectExternalDb()
 
   test "dbConnect tool with valid parameters":
-    let result = testDbConnect("mysql", "localhost", 3306, "root", "", "test")
+    let result = testDbConnect("mysql", "127.0.0.1", 3306, "root", "", "test")
     let resultJson = parseJson(result)
-    if isTestDbAvailable():
-      check resultJson["connected"].getBool() == true
-    else:
-      check resultJson.hasKey("error") or not resultJson["connected"].getBool()
-      skip()
-
+    check resultJson["connected"].getBool() == true
+ 
   test "dbConnect tool with invalid parameters":
     let result = testDbConnect("mysql", "nonexistent_host", 3306, "root", "", "test")
     let resultJson = parseJson(result)
@@ -111,7 +116,7 @@ suite "MCP Database Tool Tests":
 
   test "dbConnect tool with invalid database type":
     try:
-      let result = testDbConnect("invalid_db", "localhost", 3306, "root", "", "test")
+      let result = testDbConnect("invalid_db", "127.0.0.1", 3306, "root", "", "test")
       let resultJson = parseJson(result)
       check resultJson["success"].getBool() == false
     except:
@@ -125,10 +130,7 @@ suite "MCP Database Tool Tests":
     check statusJson["connected"].getBool() == false
 
   test "dbStatus tool when connected":
-    if not isTestDbAvailable():
-      skip()
-    
-    let connectResult = testDbConnect("mysql", "localhost", 3306, "root", "", "test")
+    let connectResult = testDbConnect("mysql", "127.0.0.1", 3306, "root", "", "test")
     let connectJson = parseJson(connectResult)
     
     # Only proceed if connection was successful
@@ -141,8 +143,7 @@ suite "MCP Database Tool Tests":
       skip()
 
   test "dbDisconnect tool":
-    if isTestDbAvailable():
-      discard testDbConnect("mysql", "localhost", 3306, "root", "", "test")
+    discard testDbConnect("mysql", "127.0.0.1", 3306, "root", "", "test")
     
     let result = testDbDisconnect()
     check "Disconnected from external database" in result
@@ -160,10 +161,7 @@ suite "MCP Database Tool Tests":
     check "Not connected" in resultJson["error"].getStr()
 
   test "dbQuery tool with connection":
-    if not isTestDbAvailable():
-      skip()
-    
-    discard testDbConnect("mysql", "localhost", 3306, "root", "", "test")
+    discard testDbConnect("mysql", "127.0.0.1", 3306, "root", "", "test")
     let result = testDbQuery("SELECT 1 as test_col", "")
     let resultJson = parseJson(result)
     
@@ -174,10 +172,7 @@ suite "MCP Database Tool Tests":
       echo "Query failed: ", resultJson["error"].getStr()
 
   test "dbQuery tool with parameters":
-    if not isTestDbAvailable():
-      skip()
-    
-    discard testDbConnect("mysql", "localhost", 3306, "root", "", "test")
+    discard testDbConnect("mysql", "127.0.0.1", 3306, "root", "", "test")
     let result = testDbQuery("SELECT ? as param_value", "42")
     let resultJson = parseJson(result)
     
@@ -201,10 +196,7 @@ suite "MCP Database Tool Tests":
     check "Not connected" in resultJson["error"].getStr()
 
   test "dbListDatabases tool with connection":
-    if not isTestDbAvailable():
-      skip()
-    
-    discard testDbConnect("mysql", "localhost", 3306, "root", "", "test")
+    discard testDbConnect("mysql", "127.0.0.1", 3306, "root", "", "test")
     let result = testDbListDatabases()
     let resultJson = parseJson(result)
     
@@ -215,10 +207,7 @@ suite "MCP Database Tool Tests":
       echo "List databases failed: ", resultJson["error"].getStr()
 
   test "dbListTables tool with connection":
-    if not isTestDbAvailable():
-      skip()
-    
-    discard testDbConnect("mysql", "localhost", 3306, "root", "", "test")
+    discard testDbConnect("mysql", "127.0.0.1", 3306, "root", "", "test")
     let result = testDbListTables("")
     let resultJson = parseJson(result)
     
@@ -234,10 +223,7 @@ suite "MCP Database Tool Tests":
     check "Not connected" in resultJson["error"].getStr()
 
   test "dbTransaction tool with simple statements":
-    if not isTestDbAvailable():
-      skip()
-    
-    discard testDbConnect("mysql", "localhost", 3306, "root", "", "test")
+    discard testDbConnect("mysql", "127.0.0.1", 3306, "root", "", "test")
     let result = testDbTransaction("SELECT 1; SELECT 2;")
     let resultJson = parseJson(result)
     
@@ -278,7 +264,7 @@ suite "MCP Database Tool Edge Cases":
   test "dbConnect with missing required parameters":
     # Test with empty database type
     try:
-      let result1 = testDbConnect("", "localhost", 3306, "root", "", "test")
+      let result1 = testDbConnect("", "127.0.0.1", 3306, "root", "", "test")
       let resultJson = parseJson(result1)
       check resultJson["success"].getBool() == false
     except:
@@ -286,10 +272,7 @@ suite "MCP Database Tool Edge Cases":
       check true
     
   test "dbQuery with invalid SQL":
-    if not isTestDbAvailable():
-      skip()
-    
-    discard testDbConnect("mysql", "localhost", 3306, "root", "", "test")
+    discard testDbConnect("mysql", "127.0.0.1", 3306, "root", "", "test")
     let result = testDbQuery("INVALID SQL SYNTAX", "")
     let resultJson = parseJson(result)
     check resultJson["success"].getBool() == false
@@ -308,10 +291,7 @@ suite "MCP Database Tool Edge Cases":
     check json2["success"].getBool() == false
 
   test "Parameter parsing":
-    if not isTestDbAvailable():
-      skip()
-    
-    discard testDbConnect("mysql", "localhost", 3306, "root", "", "test")
+    discard testDbConnect("mysql", "127.0.0.1", 3306, "root", "", "test")
     
     # Test multiple parameters
     let result = testDbQuery("SELECT ? as first, ? as second", "hello,world")
@@ -324,7 +304,7 @@ suite "MCP Database Tool Edge Cases":
 
 when isMainModule:
   echo "Running MCP Database Tool Tests..."
-  echo "Note: Integration tests require MySQL to be running on localhost:3306"
+  echo "Note: Integration tests require MySQL to be running on 127.0.0.1:3306"
   echo "To run integration tests:"
   echo "  docker run -d --name test-mysql -e MYSQL_ALLOW_EMPTY_PASSWORD=yes -p 3306:3306 mysql:8.0"
   echo ""
