@@ -2,6 +2,50 @@ import std/[json, strutils, strformat, os, osproc, options, times]
 import debby/pools, debby/mysql, debby/common
 import configuration
 
+# TidbVector type for handling TiDB vector embeddings with proper serialization
+type
+  TidbVector* = distinct seq[float]
+
+# Convert TidbVector to database parameter value
+proc sqlDumpHook*(value: TidbVector): string =
+  let vec = seq[float](value)
+  if vec.len == 0:
+    # Return special marker that we'll handle in insertSymbol
+    return "TIDB_NULL_VECTOR"
+  else:
+    var parts: seq[string] = @[]
+    for val in vec:
+      parts.add($val)
+    return "[" & parts.join(", ") & "]"
+
+# Parse database string back to TidbVector
+proc sqlParseHook*(value: string, target: var TidbVector) =
+  if value == "" or value.toLowerAscii() == "null":
+    target = TidbVector(@[])
+  else:
+    # Parse "[1.2, 3.4, 5.6]" format
+    let trimmed = value.strip()
+    if trimmed.startsWith("[") and trimmed.endsWith("]"):
+      let content = trimmed[1..^2].strip()
+      if content == "":
+        target = TidbVector(@[])
+      else:
+        var floats: seq[float] = @[]
+        for part in content.split(","):
+          try:
+            floats.add(parseFloat(part.strip()))
+          except ValueError:
+            echo "Warning: Could not parse vector component: ", part
+        target = TidbVector(floats)
+    else:
+      target = TidbVector(@[])
+
+# Helper procs for TidbVector
+proc len*(vec: TidbVector): int = seq[float](vec).len
+proc `[]`*(vec: TidbVector, idx: int): float = seq[float](vec)[idx]
+proc isEmpty*(vec: TidbVector): bool = seq[float](vec).len == 0
+proc toSeq*(vec: TidbVector): seq[float] = seq[float](vec)
+
 type
   Symbol* = ref object
     id*: int
@@ -15,10 +59,10 @@ type
     documentation*: string  # Simplified from Option[string]
     visibility*: string  # Simplified from Option[string]
     created*: DateTime
-    documentationEmbedding*: string    # Native VECTOR(1024) column
-    signatureEmbedding*: string        # Native VECTOR(1024) column
-    nameEmbedding*: string             # Native VECTOR(1024) column
-    combinedEmbedding*: string         # Native VECTOR(1024) column
+    documentationEmbedding*: TidbVector    # Native VECTOR(768) column
+    signatureEmbedding*: TidbVector        # Native VECTOR(768) column
+    nameEmbedding*: TidbVector             # Native VECTOR(768) column
+    combinedEmbedding*: TidbVector         # Native VECTOR(768) column
     embeddingModel*: string            # Model used to generate embeddings
     embeddingVersion*: string          # Version of embeddings for tracking
   
@@ -156,42 +200,50 @@ proc closeDatabase*(db: Database) =
 
 proc insertSymbol*(db: Database, name, symbolType, module, filePath: string,
                   line, col: int, signature = "", documentation = "", 
-                  visibility = "", documentationEmbedding = "", signatureEmbedding = "",
-                  nameEmbedding = "", combinedEmbedding = "", embeddingModel = "",
+                  visibility = "", documentationEmbedding = TidbVector(@[]), signatureEmbedding = TidbVector(@[]),
+                  nameEmbedding = TidbVector(@[]), combinedEmbedding = TidbVector(@[]), embeddingModel = "",
                   embeddingVersion = ""): int =
   ## Insert a symbol with native vector embeddings into the database
-  ## Empty string vector embeddings are treated as NULL to avoid TiDB "Invalid vector text" errors
+  ## Empty TidbVector embeddings are automatically handled by sqlDumpHook
   try:
-    # Use raw SQL to properly handle NULL values for empty vector strings
     db.pool.withDb:
       let createdTime = now().format("yyyy-MM-dd HH:mm:ss")
       
-      # Helper to convert empty string to NULL for SQL
-      proc toSqlValue(value: string): string =
-        if value == "": "NULL" else: "'" & value & "'"
-      
-      let sql = fmt"""
+      # First insert without vector embeddings (they default to NULL)
+      discard db.query("""
         INSERT INTO symbol (
           name, symbol_type, module, file_path, line, col,
           signature, documentation, visibility, created,
-          documentation_embedding, signature_embedding, 
-          name_embedding, combined_embedding, 
           embedding_model, embedding_version
-        ) VALUES (
-          '{name}', '{symbolType}', '{module}', '{filePath}', {line}, {col},
-          '{signature}', '{documentation}', '{visibility}', '{createdTime}',
-          {toSqlValue(documentationEmbedding)}, {toSqlValue(signatureEmbedding)},
-          {toSqlValue(nameEmbedding)}, {toSqlValue(combinedEmbedding)},
-          '{embeddingModel}', '{embeddingVersion}'
-        )
-      """
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      """, 
+        name, symbolType, module, filePath, line, col,
+        signature, documentation, visibility, createdTime,
+        embeddingModel, embeddingVersion)
+        
+      # Update with vector embeddings if they're not empty
+      let symbolIdResult = db.query("SELECT LAST_INSERT_ID()")
+      if symbolIdResult.len > 0:
+        let symbolId = parseInt(symbolIdResult[0][0])
+        
+        # Update with non-empty embeddings
+        if not documentationEmbedding.isEmpty:
+          let docEmbStr = sqlDumpHook(documentationEmbedding)
+          discard db.query("UPDATE symbol SET documentation_embedding = ? WHERE id = ?", docEmbStr, $symbolId)
+        
+        if not signatureEmbedding.isEmpty:
+          let sigEmbStr = sqlDumpHook(signatureEmbedding)
+          discard db.query("UPDATE symbol SET signature_embedding = ? WHERE id = ?", sigEmbStr, $symbolId)
+          
+        if not nameEmbedding.isEmpty:
+          let nameEmbStr = sqlDumpHook(nameEmbedding)
+          discard db.query("UPDATE symbol SET name_embedding = ? WHERE id = ?", nameEmbStr, $symbolId)
+          
+        if not combinedEmbedding.isEmpty:
+          let combinedEmbStr = sqlDumpHook(combinedEmbedding)
+          discard db.query("UPDATE symbol SET combined_embedding = ? WHERE id = ?", combinedEmbStr, $symbolId)
       
-      discard db.query(sql)
-      
-      # Get the inserted ID
-      let idResult = db.query("SELECT LAST_INSERT_ID()")
-      if idResult.len > 0:
-        return parseInt(idResult[0][0])
+        return symbolId
       else:
         return -1
         
@@ -407,14 +459,14 @@ proc getRegisteredDirectories*(db: Database): JsonNode =
   ## Get all registered directories
   result = newJArray()
   try:
-    let directories = db.pool.filter(RegisteredDirectory, "1=1 ORDER BY created_at DESC")
+    let directories = db.pool.filter(RegisteredDirectory, "1=1 ORDER BY created DESC")
     
     for directory in directories:
       let dirObj = %*{
         "path": directory.path,
         "name": directory.name,
         "description": directory.description,
-        "created_at": $directory.created
+        "created": $directory.created
       }
       result.add(dirObj)
       
@@ -442,7 +494,7 @@ proc getModules*(db: Database): JsonNode =
         "file_path": module.filePath,
         "last_modified": $module.lastModified,
         "documentation": module.documentation,
-        "created_at": $module.created
+        "created": $module.created
       }
       result.add(moduleObj)
       
@@ -461,8 +513,17 @@ proc findModule*(db: Database, name: string): Option[Module] =
   except Exception:
     return none(Module)
 
-proc vectorToTiDBString*(vec: seq[float32]): string =
+proc toTidbVector*(vec: seq[float32]): TidbVector =
+  ## Convert seq[float32] to TidbVector for database storage
+  var floats: seq[float] = @[]
+  for f in vec:
+    floats.add(float(f))
+  return TidbVector(floats)
+
+# Legacy function for backwards compatibility - can be removed after updating all callers
+proc vectorToTiDBString*(vec: seq[float32]): string {.deprecated.} =
   ## Convert vector to TiDB VECTOR string format: "[0.1, 0.2, 0.3]"
+  ## Deprecated: Use toTidbVector() and let sqlDumpHook handle serialization
   return ($vec)[1 .. ^1]
 
 # ============================================================================
@@ -470,7 +531,7 @@ proc vectorToTiDBString*(vec: seq[float32]): string =
 # ============================================================================
 
 proc updateSymbolEmbeddings*(db: Database, symbolId: int,
-                           docEmb, sigEmb, nameEmb, combinedEmb: string,
+                           docEmb, sigEmb, nameEmb, combinedEmb: TidbVector,
                            embeddingModel: string, embeddingVersion: string): bool =
   ## Update native vector embeddings for a specific symbol
   try:
@@ -492,7 +553,7 @@ proc updateSymbolEmbeddings*(db: Database, symbolId: int,
     echo "Database error updating symbol embeddings: ", e.msg
     return false
 
-proc semanticSearchSymbols*(db: Database, queryEmbedding: string,
+proc semanticSearchSymbols*(db: Database, queryEmbedding: TidbVector,
                           symbolType: string = "", moduleName: string = "",
                           limit: int = 10): JsonNode =
   ## Search symbols using vector similarity with TiDB native vector support
@@ -501,32 +562,38 @@ proc semanticSearchSymbols*(db: Database, queryEmbedding: string,
   
   # Debug: Log the query embedding details
   echo fmt"semanticSearchSymbols called with embedding length: {queryEmbedding.len}"
-  let embeddingPreview = if queryEmbedding.len > 30: queryEmbedding[0..30] & "..." else: queryEmbedding
-  echo fmt"Query embedding starts with: {embeddingPreview}"
   
   try:
     db.pool.withDb:
       # Use VEC_COSINE_DISTANCE to calculate similarity between query embedding and stored embeddings
       # Order by similarity (ascending distance) and limit results
-      var sqlQuery = fmt"""
+      # The queryEmbedding will be automatically serialized by sqlDumpHook
+      var sqlQuery = """
         SELECT
           id, name, symbol_type, module, file_path, line, col,
           signature, documentation, visibility,
-          VEC_COSINE_DISTANCE(combined_embedding, '{queryEmbedding}') as distance
+          VEC_COSINE_DISTANCE(combined_embedding, ?) as distance
         FROM symbol
         WHERE combined_embedding IS NOT NULL
       """
+      var params: seq[string] = @[sqlDumpHook(queryEmbedding)]
       
       if symbolType != "":
-        sqlQuery.add(fmt" AND symbol_type = '{symbolType}'")
+        sqlQuery.add(" AND symbol_type = ?")
+        params.add(symbolType)
         
       if moduleName != "":
-        sqlQuery.add(fmt" AND module = '{moduleName}'")
+        sqlQuery.add(" AND module = ?")
+        params.add(moduleName)
       
       # Order by distance (similarity) - smaller distance means higher similarity
       sqlQuery.add(fmt" ORDER BY distance ASC LIMIT {limit}")
       
-      let rows = db.query(sqlQuery)
+      let rows = case params.len:
+        of 1: db.query(sqlQuery, params[0])
+        of 2: db.query(sqlQuery, params[0], params[1])
+        of 3: db.query(sqlQuery, params[0], params[1], params[2])
+        else: db.query(sqlQuery)
       
       for row in rows:
         # Convert distance to similarity score (1 - distance)
@@ -553,7 +620,7 @@ proc semanticSearchSymbols*(db: Database, queryEmbedding: string,
     echo "Database error in semantic search: ", e.msg
     result = %*{"error": e.msg}
 
-proc findSimilarByEmbedding*(db: Database, embedding: string,
+proc findSimilarByEmbedding*(db: Database, embedding: TidbVector,
                            excludeId: int = -1, limit: int = 10): JsonNode =
   ## Find symbols similar to a given embedding using TiDB native vector support
   ## Uses VEC_COSINE_DISTANCE to calculate actual similarity scores
@@ -563,22 +630,27 @@ proc findSimilarByEmbedding*(db: Database, embedding: string,
     db.pool.withDb:
       # Use VEC_COSINE_DISTANCE to calculate similarity between query embedding and stored embeddings
       # Order by similarity (ascending distance) and limit results
-      var sqlQuery = fmt"""
+      var sqlQuery = """
         SELECT
           id, name, symbol_type, module, file_path, line, col,
           signature, documentation, visibility,
-          VEC_COSINE_DISTANCE(combined_embedding, '{embedding}') as distance
+          VEC_COSINE_DISTANCE(combined_embedding, ?) as distance
         FROM symbol
         WHERE combined_embedding IS NOT NULL
       """
+      var params: seq[string] = @[sqlDumpHook(embedding)]
       
       if excludeId != -1:
-        sqlQuery.add(fmt" AND id != {excludeId}")
+        sqlQuery.add(" AND id != ?")
+        params.add($excludeId)
       
       # Order by distance (similarity) - smaller distance means higher similarity
       sqlQuery.add(fmt" ORDER BY distance ASC LIMIT {limit}")
       
-      let rows = db.query(sqlQuery)
+      let rows = case params.len:
+        of 1: db.query(sqlQuery, params[0])
+        of 2: db.query(sqlQuery, params[0], params[1])
+        else: db.query(sqlQuery)
       
       for row in rows:
         # Convert distance to similarity score (1 - distance)
@@ -639,7 +711,7 @@ proc getEmbeddingStats*(db: Database): JsonNode =
       let metadataRows = db.query("""
         SELECT model_name, model_version, dimensions, embedding_type, total_symbols, last_updated
         FROM embedding_metadata 
-        ORDER BY created_at DESC
+        ORDER BY created DESC
       """)
       
       var metadataJson = newJArray()
