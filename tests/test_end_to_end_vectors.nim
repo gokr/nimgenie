@@ -52,13 +52,13 @@ suite "End-to-End Vector Workflow":
       ("calculateSum", "proc calculateSum(a, b: int): int", "Calculate sum of two integers")
     ]
     
-    var embeddings: seq[tuple[name: string, embedding: string]] = @[]
+    var embeddings: seq[tuple[name: string, embedding: TidbVector]] = @[]
     
     for (name, signature, doc) in testSymbols:
       let result = embGen.generateCombinedEmbedding(name, signature, doc)
       if result.success:
-        let vectorStr = vectorToTiDBString(result.embedding)
-        embeddings.add((name, vectorStr))
+        let vector = toTidbVector(result.embedding)
+        embeddings.add((name, vector))
         echo fmt"✓ Generated embedding for {name} ({result.embedding.len} dimensions)"
       else:
         echo fmt"✗ Failed to generate embedding for {name}: {result.error}"
@@ -107,11 +107,11 @@ suite "End-to-End Vector Workflow":
       echo fmt"✗ Failed to generate query embedding: {queryResult.error}"
       check false
     
-    let queryVectorStr = vectorToTiDBString(queryResult.embedding)
+    let queryVector = toTidbVector(queryResult.embedding)
     echo fmt"✓ Generated query embedding ({queryResult.embedding.len} dimensions)"
     
     # Perform semantic search
-    let searchResults = testDb.semanticSearchSymbols(queryVectorStr, "", "", 3)
+    let searchResults = testDb.semanticSearchSymbols(queryVector, "", "", 3)
     
     if searchResults.kind == JArray and searchResults.len > 0:
       echo fmt"✓ Vector search returned {searchResults.len} results"

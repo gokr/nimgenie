@@ -47,9 +47,9 @@ suite "Simple Vector Search Test":
         vector2Items.add(0.0)
         queryItems.add(0.0)
     
-    let vector1 = vectorToTiDBString(vector1Items)
-    let vector2 = vectorToTiDBString(vector2Items)
-    let queryVector = vectorToTiDBString(queryItems)
+    let vector1 = toTidbVector(vector1Items)
+    let vector2 = toTidbVector(vector2Items)
+    let queryVector = toTidbVector(queryItems)
     
     echo fmt"Created test vectors of length: {vector1.len}"
     
@@ -67,7 +67,7 @@ suite "Simple Vector Search Test":
     
     # Test vector search
     echo fmt"Testing search with query vector length: {queryVector.len}"
-    echo fmt"Query vector format: {queryVector[0..100]}..."
+    echo fmt"Query vector first values: [{queryVector[0]}, {queryVector[1]}, {queryVector[2]}]"
     
     # First, let's test if we can manually query the vectors that were stored
     echo "=== Testing stored vectors ==="
