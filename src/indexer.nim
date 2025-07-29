@@ -61,16 +61,57 @@ proc parseNimDocJson*(indexer: Indexer, jsonOutput: string): int =
       let moduleDoc = if docJson.hasKey("moduleDescription"): docJson["moduleDescription"].getStr() else: ""
       discard indexer.database.insertModule(moduleName, filePath, "", moduleDoc)
     
-    for entry in docJson["entries"]:
-      if not entry.hasKey("name") or not entry.hasKey("type"):
+    let entriesArray = docJson["entries"]
+    let entriesCount = entriesArray.len
+    
+    for i in 0..<entriesCount:
+      let entry = entriesArray[i]
+      
+      if entry.kind != JObject:
+        echo fmt"Warning: Entry {i} is not a JObject, skipping"
         continue
         
+      if not entry.hasKey("name") or not entry.hasKey("type"):
+        continue
+      
       let name = entry["name"].getStr()
       let symbolType = entry["type"].getStr()
       let line = if entry.hasKey("line"): entry["line"].getInt() else: 0
-      let column = if entry.hasKey("column"): entry["column"].getInt() else: 0
-      let signature = if entry.hasKey("signature"): entry["signature"].getStr() else: ""
+      let column = if entry.hasKey("col"): entry["col"].getInt() else: 0
+      # Extract signature - it can be a complex object or simple string
+      var signature = ""
+      if entry.hasKey("signature"):
+        let sigField = entry["signature"]
+        if sigField.kind == JString:
+          signature = sigField.getStr()
+        elif sigField.kind == JObject:
+          # Complex signature object - convert to readable string
+          var sigParts: seq[string] = @[]
+          if sigField.hasKey("return"):
+            sigParts.add("return: " & sigField["return"].getStr())
+          if sigField.hasKey("arguments"):
+            var argStrings: seq[string] = @[]
+            let argsField = sigField["arguments"]
+            if argsField.kind == JArray:
+              for arg in argsField:
+                if arg.hasKey("name") and arg.hasKey("type"):
+                  argStrings.add(arg["name"].getStr() & ": " & arg["type"].getStr())
+            if argStrings.len > 0:
+              sigParts.add("args: (" & argStrings.join(", ") & ")")
+          if sigField.hasKey("pragmas"):
+            var pragmaStrings: seq[string] = @[]
+            let pragmasField = sigField["pragmas"]
+            if pragmasField.kind == JArray:
+              for pragma in pragmasField:
+                pragmaStrings.add(pragma.getStr())
+            if pragmaStrings.len > 0:
+              sigParts.add("pragmas: " & pragmaStrings.join(", "))
+          signature = sigParts.join("; ")
       let documentation = if entry.hasKey("description"): entry["description"].getStr() else: ""
+      
+      # nim jsondoc only outputs exported (public) symbols, so all symbols here are public
+      let visibility = "public"
+      
       
       # Determine file path - try to get from entry or use module info
       var filePath = ""
@@ -86,7 +127,7 @@ proc parseNimDocJson*(indexer: Indexer, jsonOutput: string): int =
         filePath = indexer.projectPath / filePath
       
       # Generate embeddings for the symbol if embedding generator is available
-      var docEmb, sigEmb, nameEmb, combinedEmb = ""
+      var docEmb, sigEmb, nameEmb, combinedEmb = TidbVector(@[])
       var embeddingModel, embeddingVersion = ""
       
       if indexer.embeddingGenerator.available:
@@ -96,15 +137,15 @@ proc parseNimDocJson*(indexer: Indexer, jsonOutput: string): int =
         let nameEmbResult = indexer.embeddingGenerator.generateNameEmbedding(name, moduleName)
         let combinedEmbResult = indexer.embeddingGenerator.generateCombinedEmbedding(name, signature, documentation)
         
-        # Store embeddings if successful - convert to TiDB vector format
+        # Store embeddings if successful - convert to TidbVector format
         if docEmbResult.success:
-          docEmb = vectorToTiDBString(docEmbResult.embedding)
+          docEmb = toTidbVector(docEmbResult.embedding)
         if sigEmbResult.success:
-          sigEmb = vectorToTiDBString(sigEmbResult.embedding)
+          sigEmb = toTidbVector(sigEmbResult.embedding)
         if nameEmbResult.success:
-          nameEmb = vectorToTiDBString(nameEmbResult.embedding)
+          nameEmb = toTidbVector(nameEmbResult.embedding)
         if combinedEmbResult.success:
-          combinedEmb = vectorToTiDBString(combinedEmbResult.embedding)
+          combinedEmb = toTidbVector(combinedEmbResult.embedding)
           
         embeddingModel = indexer.config.embeddingModel
         embeddingVersion = "1.0"
@@ -118,7 +159,7 @@ proc parseNimDocJson*(indexer: Indexer, jsonOutput: string): int =
         col = column,
         signature = signature,
         documentation = documentation,
-        visibility = "", # Will be determined later if needed
+        visibility = visibility,
         documentationEmbedding = docEmb,
         signatureEmbedding = sigEmb,
         nameEmbedding = nameEmb,
