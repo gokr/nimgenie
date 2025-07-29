@@ -112,6 +112,18 @@ proc parseNimDocJson*(indexer: Indexer, jsonOutput: string): int =
       # nim jsondoc only outputs exported (public) symbols, so all symbols here are public
       let visibility = "public"
       
+      # Extract code snippet if available
+      let code = if entry.hasKey("code"): entry["code"].getStr() else: ""
+      
+      # Extract pragmas as JSON string for rich storage
+      var pragmasJson = ""
+      if entry.hasKey("signature") and entry["signature"].kind == JObject:
+        let sigField = entry["signature"]
+        if sigField.hasKey("pragmas"):
+          let pragmasField = sigField["pragmas"]
+          if pragmasField.kind == JArray and pragmasField.len > 0:
+            pragmasJson = $pragmasField  # Store as JSON string for later parsing
+      
       
       # Determine file path - try to get from entry or use module info
       var filePath = ""
@@ -160,6 +172,8 @@ proc parseNimDocJson*(indexer: Indexer, jsonOutput: string): int =
         signature = signature,
         documentation = documentation,
         visibility = visibility,
+        code = code,
+        pragmas = pragmasJson,
         documentationEmbedding = docEmb,
         signatureEmbedding = sigEmb,
         nameEmbedding = nameEmb,
@@ -219,7 +233,9 @@ proc parseNimIdxFile*(indexer: Indexer, idxFilePath: string): int =
           col = column,
           signature = "",
           documentation = description,
-          visibility = ""
+          visibility = "",
+          code = "",  # .idx files don't contain code snippets
+          pragmas = ""  # .idx files don't contain pragma information
         )
         
         if symbolId > 0:

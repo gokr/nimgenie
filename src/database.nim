@@ -58,6 +58,8 @@ type
     signature*: string  # Simplified from Option[string]
     documentation*: string  # Simplified from Option[string]
     visibility*: string  # Simplified from Option[string]
+    code*: string       # Source code snippet from nim jsondoc
+    pragmas*: string    # Pragma information (JSON string for complex data)
     created*: DateTime
     documentationEmbedding*: TidbVector    # Native VECTOR(768) column
     signatureEmbedding*: TidbVector        # Native VECTOR(768) column
@@ -140,7 +142,9 @@ proc newDatabase*(config: Config): Database =
             col INT NOT NULL,
             signature TEXT,
             documentation TEXT,
-            visibility VARCHAR(50),  
+            visibility VARCHAR(50),
+            code TEXT,
+            pragmas TEXT,
             created DATETIME NOT NULL,
             documentation_embedding VECTOR(768) NULL,
             signature_embedding VECTOR(768) NULL,
@@ -200,7 +204,8 @@ proc closeDatabase*(db: Database) =
 
 proc insertSymbol*(db: Database, name, symbolType, module, filePath: string,
                   line, col: int, signature = "", documentation = "", 
-                  visibility = "", documentationEmbedding = TidbVector(@[]), signatureEmbedding = TidbVector(@[]),
+                  visibility = "", code = "", pragmas = "",
+                  documentationEmbedding = TidbVector(@[]), signatureEmbedding = TidbVector(@[]),
                   nameEmbedding = TidbVector(@[]), combinedEmbedding = TidbVector(@[]), embeddingModel = "",
                   embeddingVersion = ""): int =
   ## Insert a symbol with native vector embeddings into the database
@@ -213,12 +218,12 @@ proc insertSymbol*(db: Database, name, symbolType, module, filePath: string,
       discard db.query("""
         INSERT INTO symbol (
           name, symbol_type, module, file_path, line, col,
-          signature, documentation, visibility, created,
+          signature, documentation, visibility, code, pragmas, created,
           embedding_model, embedding_version
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       """, 
         name, symbolType, module, filePath, line, col,
-        signature, documentation, visibility, createdTime,
+        signature, documentation, visibility, code, pragmas, createdTime,
         embeddingModel, embeddingVersion)
         
       # Update with vector embeddings if they're not empty
@@ -306,14 +311,16 @@ proc searchSymbols*(db: Database, query: string, symbolType: string = "",
       for row in rows:
         let symbolObj = %*{
           "name": row[1],        # name field
-          "type": row[2],        # symbol_type field  
+          "symbol_type": row[2], # symbol_type field (changed from "type")  
           "module": row[3],      # module field
           "file_path": row[4],   # file_path field
           "line": parseInt(row[5]),     # line field
           "column": parseInt(row[6]),   # col field
           "signature": row[7],   # signature field
           "documentation": row[8], # documentation field
-          "visibility": row[9]   # visibility field
+          "visibility": row[9],  # visibility field
+          "code": row[10],       # code field (new)
+          "pragmas": row[11]     # pragmas field (new)
         }
         result.add(symbolObj)
       
