@@ -160,9 +160,9 @@ proc newDatabase*(config: Config): Database =
         # Vector indexes need to be created separately with special syntax
         # For now, we'll skip vector indexing and rely on TiDB's vector search capabilities
         # Use raw SQL for TEXT/VARCHAR columns to specify key length
-        db.query("CREATE INDEX IF NOT EXISTS idx_symbols_name ON symbol (name(255))")
-        db.query("CREATE INDEX IF NOT EXISTS idx_symbols_module ON symbol (module(255))")
-        db.query("CREATE INDEX IF NOT EXISTS idx_symbols_symbol_type ON symbol (symbol_type(255))")
+        db.query("CREATE INDEX IF NOT EXISTS idx_symbols_name ON symbol (name(100))")
+        db.query("CREATE INDEX IF NOT EXISTS idx_symbols_module ON symbol (module(100))")
+        db.query("CREATE INDEX IF NOT EXISTS idx_symbols_symbol_type ON symbol (symbol_type(100))")
         # Create index on integer column
         db.query("CREATE INDEX IF NOT EXISTS idx_symbols_line ON symbol (line)")       
     except Exception as e:
@@ -172,11 +172,11 @@ proc newDatabase*(config: Config): Database =
     if not db.tableExists(Module):
       db.createTable(Module)
       echo "Created Module table"
-      db.query("CREATE INDEX IF NOT EXISTS idx_modules_name ON module (name(255))")
+      db.query("CREATE INDEX IF NOT EXISTS idx_modules_name ON module (name(100))")
     
     if not db.tableExists(RegisteredDirectory):
       db.createTable(RegisteredDirectory)
-      db.query("CREATE INDEX IF NOT EXISTS idx_registered_dirs_path ON registered_directory (path(255))")
+      db.query("CREATE INDEX IF NOT EXISTS idx_registered_dirs_path ON registered_directory (path(100))")
       echo "Created RegisteredDirectory table"
 
     if not db.tableExists(EmbeddingMetadata):
@@ -193,7 +193,7 @@ proc newDatabase*(config: Config): Database =
     # Create FileModification table only if it doesn't exist
     if not db.tableExists(FileModification):
       db.createTable(FileModification)
-      db.query("CREATE INDEX IF NOT EXISTS idx_file_modification_path ON file_modification (file_path(255))")
+      db.query("CREATE INDEX IF NOT EXISTS idx_file_modification_path ON file_modification (file_path(100))")
       db.query("CREATE INDEX IF NOT EXISTS idx_file_modification_time ON file_modification (modification_time)")
       echo "Created FileModification table"
     
