@@ -1,5 +1,9 @@
 # NimGenie: MCP Tool for Nim Programming
 
+**Note**: For user documentation, installation guides, tutorials, and comprehensive tool reference, see [docs/MANUAL.md](docs/MANUAL.md).
+
+This document contains developer-focused documentation including architecture decisions, coding guidelines, and implementation details.
+
 ## Project Overview
 NimGenie is a comprehensive MCP (Model Context Protocol) server for Nim programming that leverages the Nim compiler's built-in capabilities to provide intelligent code analysis, indexing, and development assistance. It uses the nimcp library for clean MCP integration and provides AI assistants with rich contextual information about Nim codebases.
 
@@ -20,7 +24,7 @@ type
     path*: string           # Project directory path
     analyzer*: Analyzer     # Nim compiler interface for this project
     lastIndexed*: DateTime  # Timestamp of last indexing
-    
+
   NimGenie* = object
     database*: Database                    # Owns Tidb database with connection pooling
     projects*: Table[string, NimProject]   # Multiple projects indexed by path
@@ -37,7 +41,7 @@ type
 
 #### Tidb + Debby Benefits:
 - **Persistent storage** - index survives server restarts
-- **Complex queries** - JOIN operations across modules, filtering by type/visibility  
+- **Complex queries** - JOIN operations across modules, filtering by type/visibility
 - **Production scalability** - handles millions of symbols with InnoDB engine
 - **Built-in indexing** - B-tree indexes on symbol names, types, locations
 - **Transaction safety** - atomic updates when rebuilding indexes
@@ -57,17 +61,17 @@ Tables are created automatically using `db.createTable(ModelType)` based on the 
 type
   Symbol* = ref object
     id*: int
-    name*: string  
+    name*: string
     symbolType*: string     # Maps to symbol_type
     module*: string
-    filePath*: string       # Maps to file_path  
+    filePath*: string       # Maps to file_path
     line*: int
     col*: int              # Renamed from 'column' to avoid SQL reserved word
     signature*: string     # Simplified from Option[string]
     documentation*: string # Simplified from Option[string]
     visibility*: string    # Simplified from Option[string]
     created*: DateTime     # DateTime for consistency
-  
+
   Module* = ref object
     id*: int
     name*: string
@@ -75,7 +79,7 @@ type
     lastModified*: DateTime    # DateTime type
     documentation*: string     # Simplified from Option[string]
     created*: DateTime         # DateTime for consistency
-  
+
   RegisteredDirectory* = ref object
     id*: int
     path*: string
@@ -124,7 +128,7 @@ proc newDatabase*(): Database =
   let password = getEnv("TIDB_PASSWORD", "")
   let database = getEnv("TIDB_DATABASE", "nimgenie")
   let poolSize = parseInt(getEnv("TIDB_POOL_SIZE", "10"))
-  
+
   result.pool = newPool()
   for i in 0 ..< poolSize:
     result.pool.add openDatabase(database, host, port, user, password)
@@ -141,11 +145,11 @@ proc newDatabase*(): Database =
       db.createIndex(Symbol, "name")
       db.createIndex(Symbol, "module")
       db.createIndex(Symbol, "symbolType")
-    
+
     if not db.tableExists(Module):
       db.createTable(Module)
       db.createIndex(Module, "name")
-    
+
     if not db.tableExists(RegisteredDirectory):
       db.createTable(RegisteredDirectory)
 
@@ -158,7 +162,7 @@ proc insertSymbol*(db: Database, ...): int =
 # Type-safe queries with Debby
 proc searchSymbols*(db: Database, query: string, ...): JsonNode =
   let symbols = db.pool.query(Symbol, "SELECT * FROM symbols WHERE name LIKE ?", fmt"%{query}%")
-  
+
 # Object-based filtering
 proc findModule*(db: Database, name: string): Option[Module] =
   let modules = db.pool.filter(Module, it.name == name)
@@ -168,7 +172,7 @@ proc findModule*(db: Database, name: string): Option[Module] =
 proc updateModule*(db: Database, module: Module) =
   db.pool.update(module)
 
-# Direct access operations  
+# Direct access operations
 proc getSymbolById*(db: Database, id: int): Option[Symbol] =
   try:
     let symbol = db.pool.get(Symbol, id)
@@ -194,7 +198,7 @@ proc clearSymbols*(db: Database, moduleName: string = "") =
 
 #### Configuration Environment Variables:
 - `TIDB_HOST` - Database host (default: localhost)
-- `TIDB_PORT` - Database port (default: 4000)  
+- `TIDB_PORT` - Database port (default: 4000)
 - `TIDB_USER` - Database user (default: root)
 - `TIDB_PASSWORD` - Database password (default: empty)
 - `TIDB_DATABASE` - Database name (default: nimgenie)
@@ -326,101 +330,6 @@ nimgenie/
 - **Production Scalable**: Distributed architecture scales horizontally
 - **Modern Architecture**: Cloud-native, ACID compliant, supports both OLTP and OLAP
 
-## Development Commands
-
-### Database Configuration
-
-#### Production Tidb Setup
-Set up your Tidb database connection via environment variables:
-```bash
-export TIDB_HOST=localhost
-export TIDB_PORT=4000
-export TIDB_USER=nimgenie_user
-export TIDB_PASSWORD=your_password
-export TIDB_DATABASE=nimgenie
-export TIDB_POOL_SIZE=10
-```
-
-#### Development with TiDB
-For development and testing, we use TiDB which provides Tidb compatibility with easier setup:
-
-```bash
-# Install TiUP (TiDB cluster management tool)
-curl --proto '=https' --tlsv1.2 -sSf https://tiup-mirrors.pingcap.com/install.sh | sh
-
-# Start TiDB playground (includes TiDB, TiKV, PD)
-tiup playground
-
-# TiDB runs on default settings:
-# - Host: 127.0.0.1
-# - Port: 4000
-# - User: root
-# - Password: (empty)
-```
-
-The test suite automatically detects TiDB availability and runs database tests when available.
-
-### Build
-```bash
-nimble build
-```
-
-### Run MCP Server
-```bash
-./nimgenie
-```
-
-### Test with specific project
-```bash
-./nimgenie --project=/path/to/nim/project
-```
-
-### Testing
-
-#### Running Tests
-```bash
-# Run all tests (database tests will be skipped if TiDB not available)
-nimble test
-
-# Run tests with TiDB available (requires tiup playground running)
-tiup playground &  # Start TiDB in background
-nimble test        # All tests including database tests will run
-```
-
-#### Test Architecture
-The test suite is designed to work with both local development and CI environments:
-
-- **Database Tests**: Use TiDB for Tidb compatibility testing
-- **Conditional Execution**: Database tests are automatically skipped if TiDB is not available
-- **Test Isolation**: Each test creates a unique database to avoid conflicts
-- **Cleanup**: Automatic cleanup of test databases after each test suite
-
-#### Test Database Connection
-Tests use these TiDB default settings:
-```nim
-# Automatically configured for tests
-TIDB_HOST=127.0.0.1
-TIDB_PORT=4000
-TIDB_USER=root
-TIDB_PASSWORD=
-TIDB_DATABASE=nimgenie_test_{timestamp}  # Unique per test run
-TIDB_POOL_SIZE=5  # Smaller pool for tests
-```
-
-#### Test File Structure
-```
-tests/
-├── test_utils.nim              # TiDB connection utilities
-├── test_directory_resources.nim    # Database-backed directory management
-├── test_directory_resources_simple.nim  # Core database operations
-├── test_mcp_tools.nim          # MCP tool handlers with database
-├── test_screenshot_workflow.nim    # File workflow tests
-└── test_*.nim.disabled         # Disabled legacy tests
-```
-
-This architecture provides the foundation for a powerful, scalable MCP tool that makes Nim development more accessible to AI assistants while leveraging the full power of the Nim toolchain.
-
-
 ## Nim coding Guidelines
 - We do not use "_" in naming (snake case), we prefer instead camel case
 - Do not shadow the local `result` variable (Nim built-in)
@@ -476,7 +385,7 @@ mcpTool:
 - **Examples**: Include format examples when helpful (e.g., version constraints, file paths)
 
 #### Section Organization
-- **Group related tools**: Use clear section headers with `# ============` borders  
+- **Group related tools**: Use clear section headers with `# ============` borders
 - **Logical ordering**: Place core functionality first, followed by specialized tools
 - **Consistent naming**: Use descriptive section names that explain the tool category
 
@@ -490,7 +399,7 @@ mcpTool:
 
 This documentation pattern ensures that AI assistants can easily understand:
 1. What each tool does and why it exists
-2. When to use each tool in typical workflows  
+2. When to use each tool in typical workflows
 3. What parameters are required and what values are expected
 4. How tools relate to each other within functional groups
 

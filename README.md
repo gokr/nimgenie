@@ -1,4 +1,4 @@
-# NimGenie
+# NimGenie v0.2.0
 
 **MCP Server for AI assisted Nim Programming**
 
@@ -9,7 +9,9 @@ NimGenie is a Model Context Protocol (MCP) server that provides AI assistants wi
 NimGenie bridges the gap between AI assistants and Nim development by providing MCP tools for the LLM to use to:
 
 - **Intelligent Symbol Search**: Find functions, types, and variables across your entire codebase and dependencies
+- **Semantic Search with Vector Embeddings**: Vector-based similarity search using TiDB native vector support
 - **Real-time Code Analysis**: Perform syntax checking and semantic validation using the Nim compiler
+- **External Database Integration**: Query external TiDB/MySQL databases directly from AI assistants
 - **Dependency Management**: Automatic discovery and indexing of Nimble packages
 - **Multi-Project Support**: Work with multiple Nim projects simultaneously
 - **Persistent Storage**: TiDB-backed symbol database that survives server restarts
@@ -22,6 +24,12 @@ NimGenie bridges the gap between AI assistants and Nim development by providing 
 - Cross-reference functionality to understand code relationships
 - Dependency-based incremental indexing that only re-indexes changed files and their dependents
 
+### 🧠 **Semantic Search with Vector Embeddings**
+- Vector-based semantic search using TiDB native vector support
+- Embedding generation via Ollama local LLM
+- Find similar symbols based on semantic meaning
+- Combined text and vector search capabilities
+
 ### 🛠️ **Development Tasks**
 - Syntax and semantic checking with detailed error reporting
 - Project statistics and codebase metrics
@@ -33,6 +41,18 @@ NimGenie bridges the gap between AI assistants and Nim development by providing 
 - Serve project files and assets as MCP resources
 - Screenshot workflow support for game development
 - Directory-based resource organization
+
+### 🗃️ **External Database Integration**
+- Query external TiDB/MySQL databases directly from AI assistants
+- Execute SQL queries with safety controls
+- Schema exploration and data analysis tools
+- Streaming query results with real-time updates
+
+### 🔧 **Advanced Tooling**
+- ~40 specialized MCP tools organized into 8+ categories
+- Streaming versions of tools for real-time progress updates
+- Multi-project support for working with multiple codebases simultaneously
+- Fine-grained locking for thread-safe concurrent access
 
 
 ## Quick Start
@@ -107,12 +127,12 @@ Options:
 
 ### 5. Tutorial
 
-For some feeling how to use Nimgenie, see the [tutorial](TUTORIAL.md).
+For comprehensive documentation and tutorials, see the [NimGenie Manual](docs/MANUAL.md).
 
 
 ## Architecture
 
-NimGenie is built with Nimcp, a library that makes it easy to build MCP servers. We mostly call out to Nim tools like nimble and the Nim compiler etc to perform indexing and other tasks. The database used is Tidb because it is MySQL compatible, fully Open Source, can run locally or is also available in the cloud and supports vector based searching and more. Embeddings are calculated via Ollama with an embeddings LLM running, typically locally.
+NimGenie is built with Nimcp, a library that makes it easy to build MCP servers. We mostly call out to Nim tools like nimble and the Nim compiler etc to perform indexing and other tasks. The database used is Tidb because it is MySQL compatible, fully Open Source, can run locally or is also available in the cloud and supports vector based searching and more. Embeddings are calculated via Ollama with an embeddings LLM running, typically locally. NimGenie also provides tools for external database integration, allowing AI assistants to query external TiDB/MySQL databases directly.
 
 ### Dependency Tracking
 
@@ -128,6 +148,21 @@ The dependency information is stored in the TiDB database with tables for:
 - `file_modification`: Stores file modification times, sizes, and hashes
 
 This approach is more reliable than manual file hash/modification tracking as it uses the compiler's own dependency analysis, handling complex import scenarios correctly.
+
+## Documentation
+
+For comprehensive documentation, see the [NimGenie Manual](docs/MANUAL.md) which covers:
+
+- Quick start guide
+- Architecture overview
+- Installation & configuration
+- Tutorial & examples
+- Complete MCP tool reference
+- Vector embedding system
+- External database integration
+- Advanced topics
+- Testing guide
+- Development guidelines
 
 ## Contributing
 
