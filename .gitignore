@@ -1,5 +1,6 @@
 # Nim binaries (without extensions)
 nimgenie
+tidb.txt
 
 # Generic pattern: Ignore files without extensions (likely executables)
 # But exclude important files that legitimately have no extension
@@ -56,6 +57,5 @@ htmldocs/
 
 # Test and temporary files
 test.nimble
-src/tidb.txt
 testresults/
 
