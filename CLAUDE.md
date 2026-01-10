@@ -304,6 +304,25 @@ nimgenie/
 └── tests/               # Test suite with database integration tests
 ```
 
+### Quick Command Reference
+```bash
+# Build the project
+nimble build
+
+# Run all tests
+nimble test
+
+# Run a single test file
+nim test_name.nim
+
+# Run tests with TiDB (start TiDB first)
+tiup playground --tag nimgenie
+nimble test
+
+# Linting (if available)
+nimble check
+```
+
 ## Technical Dependencies
 
 ### Core Dependencies
