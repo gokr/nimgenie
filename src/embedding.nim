@@ -1,5 +1,5 @@
 import std/[json, strutils, strformat, httpclient, re]
-import configuration
+import configuration, database
 
 type
   EmbeddingGenerator* = object
@@ -123,6 +123,14 @@ proc jsonToEmbedding*(jsonStr: string): seq[float32] =
       result.add(val.getFloat().float32)
   except Exception:
     result = @[]
+
+proc jsonToTidbVector*(jsonStr: string): TidbVector =
+  ## Convert JSON string to TidbVector for database storage
+  let embedding = jsonToEmbedding(jsonStr)
+  var floats: seq[float] = @[]
+  for val in embedding:
+    floats.add(val.float)
+  return TidbVector(floats)
 
 # ============================================================================
 # EMBEDDING GENERATION STRATEGIES

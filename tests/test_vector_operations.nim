@@ -13,9 +13,9 @@ suite "Vector Storage and Retrieval Tests":
   
   setup:
     testDb = createTestDatabase()
-      embeddingGen = newEmbeddingGenerator(getTestConfig("nimgenie_test"))
-      # Ensure we have a test embedding model available
-      discard embeddingGen.ensureModel(embeddingGen.config.embeddingModel)
+    embeddingGen = newEmbeddingGenerator(getTestConfig("nimgenie_test"))
+    # Ensure we have a test embedding model available
+    discard embeddingGen.ensureModel(embeddingGen.config.embeddingModel)
   
   teardown:
     cleanupTestDatabase(testDb)
@@ -46,10 +46,10 @@ suite "Vector Storage and Retrieval Tests":
       # Update embeddings
       let success = testDb.updateSymbolEmbeddings(
         symbolId,
-        embeddingJson,  # docEmb
-        embeddingJson,  # sigEmb
-        embeddingJson,  # nameEmb
-        embeddingJson,  # combinedEmb
+        jsonToTidbVector(embeddingJson),  # docEmb
+        jsonToTidbVector(embeddingJson),  # sigEmb
+        jsonToTidbVector(embeddingJson),  # nameEmb
+        jsonToTidbVector(embeddingJson),  # combinedEmb
         embeddingGen.config.embeddingModel,
         "1.0"
       )
@@ -62,13 +62,9 @@ suite "Vector Storage and Retrieval Tests":
       
       let symbol = symbolOpt.get()
       check symbol.documentationEmbedding.len > 0
-      check symbol.documentationEmbeddingVec.len > 0
       check symbol.signatureEmbedding.len > 0
-      check symbol.signatureEmbeddingVec.len > 0
       check symbol.nameEmbedding.len > 0
-      check symbol.nameEmbeddingVec.len > 0
       check symbol.combinedEmbedding.len > 0
-      check symbol.combinedEmbeddingVec.len > 0
 
   test "Semantic search with native vectors":
     # Generate embeddings for test symbols
@@ -90,9 +86,9 @@ suite "Vector Storage and Retrieval Tests":
       check id3 > 0
       
       # Update embeddings
-      discard testDb.updateSymbolEmbeddings(id1, "", "", "", embeddingToJson(embedding1.embedding), embeddingGen.config.embeddingModel, "1.0")
-      discard testDb.updateSymbolEmbeddings(id2, "", "", "", embeddingToJson(embedding2.embedding), embeddingGen.config.embeddingModel, "1.0")
-      discard testDb.updateSymbolEmbeddings(id3, "", "", "", embeddingToJson(embedding3.embedding), embeddingGen.config.embeddingModel, "1.0")
+      discard testDb.updateSymbolEmbeddings(id1, jsonToTidbVector(""), jsonToTidbVector(""), jsonToTidbVector(""), jsonToTidbVector(embeddingToJson(embedding1.embedding)), embeddingGen.config.embeddingModel, "1.0")
+      discard testDb.updateSymbolEmbeddings(id2, jsonToTidbVector(""), jsonToTidbVector(""), jsonToTidbVector(""), jsonToTidbVector(embeddingToJson(embedding2.embedding)), embeddingGen.config.embeddingModel, "1.0")
+      discard testDb.updateSymbolEmbeddings(id3, jsonToTidbVector(""), jsonToTidbVector(""), jsonToTidbVector(""), jsonToTidbVector(embeddingToJson(embedding3.embedding)), embeddingGen.config.embeddingModel, "1.0")
       
       # Generate query embedding for "file operations"
       let queryEmbedding = embeddingGen.generateEmbedding("file operations")
@@ -133,12 +129,12 @@ suite "Vector Storage and Retrieval Tests":
       check id3 > 0
       
       # Update embeddings
-      discard testDb.updateSymbolEmbeddings(id1, "", "", "", embeddingToJson(embedding1.embedding), embeddingGen.config.embeddingModel, "1.0")
-      discard testDb.updateSymbolEmbeddings(id2, "", "", "", embeddingToJson(embedding2.embedding), embeddingGen.config.embeddingModel, "1.0")
-      discard testDb.updateSymbolEmbeddings(id3, "", "", "", embeddingToJson(embedding3.embedding), embeddingGen.config.embeddingModel, "1.0")
+      discard testDb.updateSymbolEmbeddings(id1, jsonToTidbVector(""), jsonToTidbVector(""), jsonToTidbVector(""), jsonToTidbVector(embeddingToJson(embedding1.embedding)), embeddingGen.config.embeddingModel, "1.0")
+      discard testDb.updateSymbolEmbeddings(id2, jsonToTidbVector(""), jsonToTidbVector(""), jsonToTidbVector(""), jsonToTidbVector(embeddingToJson(embedding2.embedding)), embeddingGen.config.embeddingModel, "1.0")
+      discard testDb.updateSymbolEmbeddings(id3, jsonToTidbVector(""), jsonToTidbVector(""), jsonToTidbVector(""), jsonToTidbVector(embeddingToJson(embedding3.embedding)), embeddingGen.config.embeddingModel, "1.0")
       
       # Find similar symbols to the first one
-      let results = testDb.findSimilarByEmbedding(embeddingToJson(embedding1.embedding), excludeId = id1, limit = 10)
+      let results = testDb.findSimilarByEmbedding(jsonToTidbVector(embeddingToJson(embedding1.embedding)), excludeId = id1, limit = 10)
       
       check results.len > 0
       
