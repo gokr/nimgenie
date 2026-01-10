@@ -2,43 +2,59 @@
 ## Tests actual HTTP communication with running NimGenie server
 ## Validates all MCP tools through real JSON-RPC calls
 
-import unittest, json, os, strutils, times, strformat
+import unittest, json, os, strutils, strformat
 import test_utils, test_server, mcp_client
 
 suite "MCP Server Integration Tests":
 
   test "Server startup and basic communication":
-    withTestServerAndClient():
-      # Test basic ping
-      check client.ping() == true
-      
-      # Test MCP initialization
-      let initResult = client.initialize()
-      check initResult.hasKey("protocolVersion")
-      check initResult.hasKey("capabilities")
+    var testServer = newTestServer()
+    if not testServer.start():
+      skip()
+    else:
+      var client = testServer.createClient()
+      try:
+        # Test basic ping
+        check client.ping() == true
+        
+        # Test MCP initialization
+        let initResult = client.initialize()
+        check initResult.hasKey("protocolVersion")
+        check initResult.hasKey("capabilities")
+      finally:
+        client.close()
+        testServer.stop()
 
   test "List available tools":
-    withTestServerAndClient():
-      let toolsResult = client.listTools()
-      check toolsResult.hasKey("tools")
-      
-      let tools = toolsResult["tools"]
-      check tools.kind == JArray
-      check tools.len > 0
-      
-      # Check for expected tools
-      var toolNames: seq[string] = @[]
-      for tool in tools:
-        if tool.hasKey("name"):
-          toolNames.add(tool["name"].getStr())
-      
-      # Verify key tools are present
-      check "indexCurrentProject" in toolNames
-      check "searchSymbols" in toolNames
-      check "getSymbolInfo" in toolNames
-      check "addDirectoryResource" in toolNames
-      check "listDirectoryResources" in toolNames
-      check "removeDirectoryResource" in toolNames
+    var testServer = newTestServer()
+    if not testServer.start():
+      skip()
+    else:
+      var client = testServer.createClient()
+      try:
+        let toolsResult = client.listTools()
+        check toolsResult.hasKey("tools")
+        
+        let tools = toolsResult["tools"]
+        check tools.kind == JArray
+        check tools.len > 0
+        
+        # Check for expected tools
+        var toolNames: seq[string] = @[]
+        for tool in tools:
+          if tool.hasKey("name"):
+            toolNames.add(tool["name"].getStr())
+        
+        # Verify key tools are present
+        check "indexCurrentProject" in toolNames
+        check "searchSymbols" in toolNames
+        check "getSymbolInfo" in toolNames
+        check "addDirectoryResource" in toolNames
+        check "listDirectoryResources" in toolNames
+        check "removeDirectoryResource" in toolNames
+      finally:
+        client.close()
+        testServer.stop()
 
 suite "Directory Resource MCP Tool Tests":
 
@@ -281,7 +297,7 @@ suite "Error Handling and Edge Cases":
     var testServer = newTestServer()
     check testServer.start() == true
     
-    let mcpClient = testServer.createClient()
+    var mcpClient = testServer.createClient()
     check mcpClient.ping() == true
     
     # Stop server
