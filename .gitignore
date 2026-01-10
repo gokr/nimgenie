@@ -1,7 +1,3 @@
-# Nim binaries (without extensions)
-nimgenie
-tidb.txt
-
 # Generic pattern: Ignore files without extensions (likely executables)
 # But exclude important files that legitimately have no extension
 *
@@ -14,6 +10,10 @@ tidb.txt
 !CHANGELOG
 !CONTRIBUTORS
 !AUTHORS
+
+# Nim binaries (without extensions)
+nimgenie
+tidb.txt
 
 # Compiled Object files
 *.o
