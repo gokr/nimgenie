@@ -43,7 +43,7 @@ proc startTestServer(port: int) {.thread.} =
     serverRunning = true
     
     # Create basic nimgenie instance for testing
-    let server = mcpServer("nimgenie-test", "0.1.0"):
+    let server = mcpServer("nimgenie-test", "0.2.0"):
       # Add a simple streaming test tool
       mcpTool:
         proc testStreamingTool(ctx: McpRequestContext, message: string = "test"): string {.gcsafe.} =

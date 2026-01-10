@@ -1,7 +1,7 @@
 ## Test utilities for NimGenie tests
 ## Provides common setup for TiDB connections and test databases
 
-import os, strutils, strformat
+import os, strutils
 import ../src/database
 import ../src/configuration
 import debby/pools, debby/mysql
@@ -24,7 +24,7 @@ proc cleanTestTables*(db: Database) =
   except Exception as e:
     echo "Warning: Could not clean test tables: ", e.msg
 
-proc getTestConfig(dbName: string): Config =
+proc getTestConfig*(dbName: string): Config =
   ## Create a configuration for test database
   result = Config(
     port: 0,

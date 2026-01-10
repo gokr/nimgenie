@@ -1,6 +1,6 @@
 # Package
 
-version       = "0.1.0"
+version       = "0.2.0"
 author        = "Göran Krampe"
 description   = "MCP server for Nim programming with intelligent code analysis and indexing"
 license       = "MIT"
@@ -12,3 +12,7 @@ bin           = @["nimgenie"]
 requires "nim >= 2.2.4"
 requires "file:///home/gokr/tankfeud/nimcp"
 requires "https://github.com/gokr/debby" # Adds DateTime support
+
+task test, "Run all tests":
+  exec "nimble install -d"
+  exec "testament --colors:on pattern 'tests/test_*.nim'"

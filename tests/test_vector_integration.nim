@@ -49,10 +49,10 @@ suite "Vector Integration Tests":
       signature = "proc testFunction(): void",
       documentation = "A test function",
       visibility = "public",
-      documentationEmbedding = testVector,
-      signatureEmbedding = testVector,
-      nameEmbedding = testVector,
-      combinedEmbedding = testVector,
+      documentationEmbedding = jsonToTidbVector(testVector),
+      signatureEmbedding = jsonToTidbVector(testVector),
+      nameEmbedding = jsonToTidbVector(testVector),
+      combinedEmbedding = jsonToTidbVector(testVector),
       embeddingModel = "nomic-embed-text",
       embeddingVersion = "1.0"
     )
@@ -73,19 +73,19 @@ suite "Vector Integration Tests":
     let vector2 = "[" & vector2Items.join(",") & "]"
     let vector3 = "[" & vector3Items.join(",") & "]"
     
-    let id1 = testDb.insertSymbol("func1", "proc", "testMod", "/test1.nim", 1, 1, 
-                                  combinedEmbedding = vector1, embeddingModel = "test")
+    let id1 = testDb.insertSymbol("func1", "proc", "testMod", "/test1.nim", 1, 1,
+                                  combinedEmbedding = jsonToTidbVector(vector1), embeddingModel = "test")
     let id2 = testDb.insertSymbol("func2", "proc", "testMod", "/test2.nim", 2, 1,
-                                  combinedEmbedding = vector2, embeddingModel = "test")
+                                  combinedEmbedding = jsonToTidbVector(vector2), embeddingModel = "test")
     let id3 = testDb.insertSymbol("func3", "proc", "testMod", "/test3.nim", 3, 1,
-                                  combinedEmbedding = vector3, embeddingModel = "test")
+                                  combinedEmbedding = jsonToTidbVector(vector3), embeddingModel = "test")
     
     echo fmt"✓ Inserted symbols with IDs: {id1}, {id2}, {id3}"
     echo fmt"✓ Query vector length: {vector1.len}"
     echo fmt"✓ Query vector sample: {vector1[0..50]}..."
     
     # Test semantic search - search for vector1
-    let searchResults = testDb.semanticSearchSymbols(vector1, "", "", 3)
+    let searchResults = testDb.semanticSearchSymbols(jsonToTidbVector(vector1), "", "", 3)
     
     if searchResults.kind == JArray and searchResults.len > 0:
       echo "✓ Vector search returned ", searchResults.len, " results"

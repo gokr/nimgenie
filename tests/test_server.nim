@@ -68,7 +68,7 @@ proc start*(server: var TestServer): bool =
   if not fileExists(nimbleFile):
     writeFile(nimbleFile, """
 # Package
-version       = "0.1.0"
+version       = "0.2.0"
 author        = "Test"
 description   = "Test project"
 license       = "MIT"
@@ -79,7 +79,7 @@ requires "nim >= 1.6.0"
 """)
   
   # Start the server process
-  let args = @["--port", $server.port, "--project", server.projectPath]
+  let args = @[fmt"--port={server.port}", fmt"--project={server.projectPath}", "--no-discovery"]
   try:
     echo "Starting server: " & nimgenieExe & " " & args.join(" ")
     server.process = startProcess(
@@ -97,8 +97,8 @@ requires "nim >= 1.6.0"
       echo "Server process died immediately"
       return false
     
-    # Wait for server to be ready (Nimble package discovery can take time)
-    let ready = waitForServer(server.port, 60000)  # 60 second timeout
+    # Wait for server to be ready (should be fast with --no-discovery)
+    let ready = waitForServer(server.port, 30000)  # 30 second timeout
     if ready:
       server.isRunning = true
       echo fmt"Test server started successfully on port {server.port}"
@@ -162,31 +162,31 @@ template withTestServer*(projectPath: string = "", body: untyped): untyped =
   var testServer = newTestServer(projectPath)
   
   if not testServer.start():
-    skip("Failed to start test server")
+    skip()
   else:
     try:
       # Make server available to test body
-      let server {.inject.} = testServer
+      template server(): untyped {.inject.} = testServer
       body
     finally:
       testServer.stop()
 
 template withTestServerAndClient*(projectPath: string = "", body: untyped): untyped =
   ## Template that runs tests with a server and connected client
-  var testServer = newTestServer(projectPath)
-  
-  if not testServer.start():
-    skip("Failed to start test server")
-  else:
-    var mcpClient = testServer.createClient()
+  (proc() =
+    var testServer = newTestServer(projectPath)
+    
+    if not testServer.start():
+      skip()
+      return
+    
+    var client = testServer.createClient()
     try:
-      # Make both server and client available to test body
-      let server {.inject.} = testServer
-      let client {.inject.} = mcpClient
       body
     finally:
-      mcpClient.close()
+      client.close()
       testServer.stop()
+  )()
 
 proc createTestProject*(basePath: string, projectName: string): string =
   ## Create a test Nim project with basic structure
@@ -197,7 +197,7 @@ proc createTestProject*(basePath: string, projectName: string): string =
   # Create a basic nimble file
   let nimbleContent = fmt"""
 # Package
-version       = "0.1.0"
+version       = "0.2.0"
 author        = "Test Author"
 description   = "Test project for NimGenie"
 license       = "MIT"

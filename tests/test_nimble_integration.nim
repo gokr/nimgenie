@@ -87,7 +87,7 @@ exec "nim doc src/nimble_parse_test.nim"
     # Modify nimble file to have specific dependencies
     let nimbleFile = projectPath / "nimble_deps_test.nimble"
     let nimbleContent = """
-version = "0.1.0"
+version = "0.2.0"
 author = "Test"
 description = "Test dependencies"
 license = "MIT"

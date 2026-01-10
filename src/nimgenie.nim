@@ -461,7 +461,7 @@ Dependency indexing completed:
 
 proc showVersion() =
   ## Display version information and exit
-  echo "NimGenie v0.1.0"
+  echo "NimGenie v0.2.0"
   echo "MCP server for Nim programming with intelligent code analysis and indexing"
   echo "Copyright (c) 2024 Göran Krampe"
   echo "Licensed under MIT License"
@@ -470,7 +470,7 @@ proc showVersion() =
 proc showHelp() =
   ## Display help information and exit
   echo """
-NimGenie v0.1.0 - MCP Server for Nim Programming
+NimGenie v0.2.0 - MCP Server for Nim Programming
 
 USAGE:
     nimgenie [OPTIONS]
@@ -622,7 +622,7 @@ proc parseCommandLine(): Config =
   if result.showVersion:
     showVersion()
 
-let server = mcpServer("nimgenie", "0.1.0"):
+let server = mcpServer("nimgenie", "0.2.0"):
 
   # ============================================================================
   # CORE PROJECT ANALYSIS TOOLS

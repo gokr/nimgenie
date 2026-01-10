@@ -32,7 +32,7 @@ proc createTestProject(tempDir: string): string =
   
   # Create a simple .nimble file
   writeFile(projectDir / "streaming_test.nimble", """
-version       = "0.1.0"
+version       = "0.2.0"
 author        = "Test"
 description   = "Test project for streaming"
 license       = "MIT"
