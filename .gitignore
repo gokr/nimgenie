@@ -53,3 +53,9 @@ htmldocs/
 
 # Claude code
 .claude/
+
+# Test and temporary files
+test.nimble
+src/tidb.txt
+testresults/
+
