@@ -14,14 +14,15 @@ proc testDbConnect(dbType, host: string, port: int, user, password, database: st
       externalDbDatabase: database,
       externalDbPoolSize: 5
     )
-    
+
     if connectExternalDb(config):
       let status = getConnectionStatus()
       return $status
     else:
-      return """{"success": false, "error": "Failed to connect to database"}"""
+      let status = getConnectionStatus()
+      return $status
   except Exception as e:
-    return $(%*{"success": false, "error": e.msg})
+    return $(%*{"connected": false, "error": e.msg})
 
 proc testDbStatus(): string =
   ## Test version of dbStatus MCP tool
@@ -111,15 +112,14 @@ suite "MCP Database Tool Tests":
   test "dbConnect tool with invalid parameters":
     let result = testDbConnect("tidb", "nonexistent_host", 4000, "root", "", "test")
     let resultJson = parseJson(result)
-    check resultJson["success"].getBool() == false
+    check resultJson["connected"].getBool() == false
 
   test "dbConnect tool with invalid database type":
     try:
       let result = testDbConnect("invalid_db", "127.0.0.1", 4000, "root", "", "test")
       let resultJson = parseJson(result)
-      check resultJson["success"].getBool() == false
+      check resultJson["connected"].getBool() == false
     except:
-      # Expected to fail with unsupported database type
       check true
 
   test "dbStatus tool when not connected":
@@ -261,13 +261,11 @@ suite "MCP Database Tool Tests":
 suite "MCP Database Tool Edge Cases":
   
   test "dbConnect with missing required parameters":
-    # Test with empty database type
     try:
       let result1 = testDbConnect("", "127.0.0.1", 4000, "root", "", "test")
       let resultJson = parseJson(result1)
-      check resultJson["success"].getBool() == false
+      check resultJson["connected"].getBool() == false
     except:
-      # Expected to fail with unsupported database type
       check true
     
   test "dbQuery with invalid SQL":
