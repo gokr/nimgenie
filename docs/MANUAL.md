@@ -264,9 +264,8 @@ For semantic search capabilities, you need Ollama running locally:
 
 ```bash
 # Install Ollama from https://ollama.com
-# Then run an embeddings model:
+# Then install an embeddings model
 ollama pull nomic-embed-text
-ollama run nomic-embed-text
 ```
 
 NimGenie will automatically use Ollama for generating vector embeddings when available.
