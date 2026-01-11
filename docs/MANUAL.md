@@ -12,9 +12,10 @@
 6. [MCP Tool Reference](#6-mcp-tool-reference)
 7. [Vector Embedding System](#7-vector-embedding-system)
 8. [External Database Integration](#8-external-database-integration)
-9. [Advanced Topics](#9-advanced-topics)
-10. [Testing Guide](#10-testing-guide)
-11. [Development Guidelines](#11-development-guidelines)
+9. **[Output Schema Reference](#9-output-schema-reference)** - JSON schemas for all tools
+10. [Advanced Topics](#10-advanced-topics)
+11. [Testing Guide](#11-testing-guide)
+12. [Development Guidelines](#12-development-guidelines)
 
 ---
 
@@ -1666,11 +1667,208 @@ The database tools integrate seamlessly with NimGenie's existing features:
 
 This database integration transforms NimGenie from a Nim-specific tool into a comprehensive development assistant capable of both code analysis and database operations.
 
-## 9. Advanced Topics
+---
+
+## 9. Output Schema Reference
+
+NimGenie implements comprehensive output schemas for all 46 MCP tools, following the [Model Context Protocol specification](https://modelcontextprotocol.io). Output schemas provide structured documentation of tool return values, enabling LLMs to understand exactly what data they'll receive and how to process it.
+
+### 9.1 What Are Output Schemas?
+
+Output schemas are JSON Schema documents that describe:
+- **Return types**: Whether a tool returns a string, number, boolean, array, or object
+- **Field structures**: For objects and arrays, what fields/properties are included
+- **Data types**: The type of each field (string, integer, number, boolean, etc.)
+- **Descriptions**: Human-readable explanations of what each field represents
+- **Constraints**: Minimum/maximum values, enum restrictions, required fields
+- **Optional vs required**: Which fields are guaranteed to exist vs optional
+
+### 9.2 Benefits of Output Schemas
+
+**For LLMs:**
+- ✅ Better tool selection based on output requirements
+- ✅ Programmatic understanding of return structures
+- ✅ Proper field access without guessing
+- ✅ Type-safe expectations for all return values
+- ✅ Improved error handling and validation
+
+**For Developers:**
+- ✅ Clear documentation of tool behavior
+- ✅ Self-documenting code through schema descriptions
+- ✅ Better IDE support and autocompletion
+- ✅ Easier testing and validation of tool outputs
+
+### 9.3 Output Schema Format
+
+All output schemas are documented inline using the Nim `## returns:` format:
+
+```nim
+mcpTool:
+  proc searchSymbols(query: string): string {.gcsafe.} =
+    ## Search for symbols
+    ## - query: Search string
+    ##
+    ## returns: {
+    ##   "type": "array",
+    ##   "description": "Matching symbols",
+    ##   "items": {
+    ##     "type": "object",
+    ##     "properties": {
+    ##       "name": {"type": "string", "description": "Symbol name"},
+    ##       "symbol_type": {"type": "string", "description": "Type of symbol"}
+    ##     },
+    ##     "required": ["name"]
+    ##   }
+    ## }
+```
+
+### 9.4 Complete Schema List
+
+All 46 tools have comprehensive output schemas:
+
+1. **Core Analysis Tools** (8 tools)
+   - `indexCurrentProject`, `indexProjectDependenciesOnly`
+   - `searchSymbols`, `getSymbolInfo`, `getProjectStats`
+   - `checkSyntax`
+
+2. **Semantic Search & Embeddings** (4 tools)
+   - `semanticSearchSymbols`, `findSimilarSymbols`
+   - `searchByExample`, `exploreCodeConcepts`
+   - `generateEmbeddings`, `getEmbeddingStats`
+
+3. **Directory Resources** (3 tools)
+   - `addDirectoryResource`, `listDirectoryResources`, `removeDirectoryResource`
+
+4. **Nimble Package Discovery** (2 tools)
+   - `listNimblePackages`, `indexNimblePackage`
+
+5. **Package Management** (5 tools)
+   - `nimbleInstallPackage`, `nimbleUninstallPackage`
+   - `nimbleSearchPackages`, `nimbleListPackages`, `nimbleRefreshPackages`
+
+6. **Development Tools** (6 tools)
+   - `nimbleInitProject`, `nimbleBuildProject`, `nimbleTestProject`
+   - `nimbleRunProject`, `nimbleCheckProject`, `nimbleDevelopPackage`
+
+7. **Dependency & Project Info** (7 tools)
+   - `nimbleUpgradePackages`, `nimbleDumpDependencies`
+   - `nimblePackageInfo`, `nimbleShowDependencies`
+   - `nimblePackageVersions`, `nimbleShowProject`, `nimbleProjectStatus`
+
+8. **Database Tools** (11 tools)
+   - `dbConnect`, `dbQuery`, `dbExecute`, `dbTransaction`
+   - `dbListDatabases`, `dbListTables`, `dbDescribeTable`, `dbShowIndexes`
+   - `dbStatus`, `dbDisconnect`, `dbExplainQuery`
+
+### 9.5 Example Output Schemas
+
+**Simple String Result (indexCurrentProject):**
+```json
+{
+  "type": "string",
+  "description": "Human-readable summary of indexing results"
+}
+```
+
+**Complex Object (dbStatus):**
+```json
+{
+  "type": "object",
+  "description": "Database connection status",
+  "properties": {
+    "connected": {"type": "boolean"},
+    "database_type": {"type": "string"},
+    "host": {"type": "string"},
+    "port": {"type": "integer"},
+    "database": {"type": "string"},
+    "error": {"type": "string"}
+  }
+}
+```
+
+**Array of Objects (searchSymbols):**
+```json
+{
+  "type": "array",
+  "description": "Array of matching symbols",
+  "items": {
+    "type": "object",
+    "properties": {
+      "name": {"type": "string", "description": "Symbol name"},
+      "symbol_type": {"type": "string", "description": "Type: proc, type, var, etc."},
+      "module": {"type": "string", "description": "Module where defined"},
+      "file_path": {"type": "string", "description": "Source file location"},
+      "line": {"type": "integer", "description": "Line number"}
+    },
+    "required": ["name", "symbol_type", "module", "file_path", "line"]
+  }
+}
+```
+
+### 9.6 Implementation Details
+
+The output schema system is implemented through the Nimcp library with several key components:
+
+#### Nimcp Library Changes
+
+**1. McpTool Type Extension** (src/nimcp/types.nim)
+- Added `outputSchema: Option[JsonNode]` field to the `McpTool` object
+- Stores the optional JSON Schema describing tool output format
+- Follows MCP specification's optional outputSchema field
+
+**2. Schema Extraction Macro** (src/nimcp/mcpmacros.nim)
+- Implemented `extractOutputSchema(procNode: NimNode): Option[JsonNode]`
+- Parses documentation comments for `## returns: { ... }` blocks
+- Extracts JSON Schema from multi-line comment blocks
+- Handles both "returns:" and "Returns:" markers
+- Returns `None` if no schema found (backward compatible)
+
+**3. MCP Tool Macro Integration**
+- Updated `mcpTool` macro to call `extractOutputSchema()` during tool registration
+- Automatically includes extracted schema when creating `McpTool` instances
+- Integration happens at compile time with no runtime overhead
+- Maintains full backward compatibility (outputSchema is optional per MCP spec)
+
+#### How It Works
+
+1. **Compile-Time Extraction**: When a tool is defined with `mcpTool:` macro, the compiler:
+   - Finds the `## returns:` documentation block
+   - Extracts the JSON Schema from the comment
+   - Parses it into a JsonNode
+   - Stores it in the McpTool.outputSchema field
+
+2. **Tool Registration**: During server initialization:
+   - All tools are registered with their schemas
+   - Schemas are included in the tools/list MCP response
+   - LLMs can parse schemas to understand return structures
+
+3. **Runtime Usage**: When tools are called:
+   - Tools return data as usual (JSON strings)
+   - Schemas are not validated at runtime (optional in MCP spec)
+   - LLMs use schemas to understand and parse results
+
+#### Benefits of the Implementation
+
+- **Zero Runtime Overhead**: All schema extraction happens at compile time
+- **Backward Compatible**: Tools without schemas work normally
+- **Type Safe**: Nim's type system ensures valid JsonNode construction
+- **MCP Compliant**: Follows the official MCP specification (2025-11-25)
+- **Developer Friendly**: Simple `## returns:` format is easy to write and read
+
+#### Technical Requirements
+
+- **Nim version**: 2.2.4+ (for proper macro and JSON support)
+- **JsonNode**: Used for schema representation and validation
+- **Macro system**: Leverages Nim's powerful compile-time meta-programming
+- **No additional dependencies**: Built on existing nimcp infrastructure
+
+---
+
+## 10. Advanced Topics
 
 This section covers advanced technical topics about NimGenie's indexing strategies, dependency tracking, and performance optimization.
 
-### 9.1 Dependency-Based Indexing Strategy
+### 10.1 Dependency-Based Indexing Strategy
 
 NimGenie uses the Nim compiler's built-in dependency analysis (`nim genDepend`) to enable efficient incremental indexing, avoiding the need to re-index unchanged files.
 
@@ -1818,7 +2016,7 @@ The implementation is production-ready with:
 - ✅ Comprehensive test coverage
 - ✅ Performance optimizations
 
-### 9.2 Indexing Strategy: nim jsondoc vs nim doc --index
+### 10.2 Indexing Strategy: nim jsondoc vs nim doc --index
 
 NimGenie uses a hybrid approach with both Nim compiler commands to balance comprehensive coverage with performance.
 

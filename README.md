@@ -49,7 +49,8 @@ NimGenie bridges the gap between AI assistants and Nim development by providing 
 - Streaming query results with real-time updates
 
 ### 🔧 **Advanced Tooling**
-- ~40 specialized MCP tools organized into 8+ categories
+- **46 specialized MCP tools** organized into 8+ functional categories
+- **Structured Output Schemas**: All tools include MCP-compliant output schemas for better LLM understanding
 - Streaming versions of tools for real-time progress updates
 - Multi-project support for working with multiple codebases simultaneously
 - Fine-grained locking for thread-safe concurrent access
@@ -160,9 +161,20 @@ For comprehensive documentation, see the [NimGenie Manual](docs/MANUAL.md) which
 - Complete MCP tool reference
 - Vector embedding system
 - External database integration
+- **Output Schema Reference** - JSON schemas for all 46 MCP tools
 - Advanced topics
 - Testing guide
 - Development guidelines
+
+### Output Schema Documentation
+
+NimGenie now includes comprehensive output schemas for all 46 MCP tools, following the MCP specification. These schemas provide LLMs with structured information about tool return values, enabling better tool selection and result handling.
+
+See `docs/MANUAL.md#output-schema-reference` (Section 9) for detailed documentation covering:
+- What output schemas are and their benefits
+- Schema format and examples
+- All 46 tools with their return value structures
+- Implementation details and technical information
 
 ## Contributing
 
