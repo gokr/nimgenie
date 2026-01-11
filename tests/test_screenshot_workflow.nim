@@ -254,17 +254,25 @@ suite "Screenshot Workflow Error Handling Tests":
     check not fileExists(nonexistentFile)
 
   test "Path traversal security test":
-    # Create a file outside the screenshots directory
+    # The security check should be handled by the server layer
+    # This test validates path normalization behavior
     let outsideFile = testTempDir / "outside.txt"
     writeFile(outsideFile, "This file should not be accessible")
-    
+
     # Validate the file structure
     check fileExists(outsideFile)
     check not fileExists(screenshotDir / "outside.txt")
-    
-    # Test that path traversal would need to be handled by the server layer
+
+    # Test path normalization - ../outside.txt normalizes to testTempDir/outside.txt
     let maliciousPath = screenshotDir / "../outside.txt"
-    check not fileExists(maliciousPath.normalizedPath())
+    let normalized = maliciousPath.normalizedPath()
+    # The normalized path will point to testTempDir/outside.txt
+    check normalized == testTempDir / "outside.txt"
+
+    # Clean up the file for next test
+    if fileExists(outsideFile):
+      removeFile(outsideFile)
+      check not fileExists(outsideFile)
 
   test "No screenshots directory exists":
     # Remove the screenshots directory to test error handling
