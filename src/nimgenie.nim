@@ -637,6 +637,11 @@ let server = mcpServer("nimgenie", "0.2.0"):
       ## step when working with a new Nim project to enable intelligent code search and analysis.
       ## Provides real-time streaming progress updates so you can monitor indexing progress, especially
       ## useful for large projects with many dependencies.
+      ##
+      ## returns: {
+      ##   "type": "string",
+      ##   "description": "Human-readable summary of indexing results with statistics"
+      ## }
       try:
         withGenie:
           # Get or create current project
@@ -689,6 +694,11 @@ Use searchSymbols to search across all indexed code.
       ## source files. Use this when dependencies have been updated or when you need dependency symbols
       ## but the main project is already indexed. Provides real-time streaming progress updates so you can
       ## monitor dependency indexing progress.
+      ##
+      ## returns: {
+      ##   "type": "string",
+      ##   "description": "Human-readable summary of dependency indexing results"
+      ## }
       {.cast(gcsafe).}:
         try:
           withGenie:
@@ -723,6 +733,26 @@ Use searchSymbols to search across all indexed code.
       ## - query: Symbol name or partial name to search for (supports partial matching)
       ## - symbolType: Optional filter by symbol type (e.g., "proc", "type", "var", "const", "template", "macro")
       ## - moduleName: Optional filter to search only within a specific module or package
+      ##
+      ## returns: {
+      ##   "type": "array",
+      ##   "description": "Array of symbols matching the search criteria, sorted by relevance",
+      ##   "items": {
+      ##     "type": "object",
+      ##     "properties": {
+      ##       "name": {"type": "string", "description": "Symbol name"},
+      ##       "symbol_type": {"type": "string", "description": "Type of symbol: proc, type, var, const, template, macro, or iterator"},
+      ##       "module": {"type": "string", "description": "Module or package where the symbol is defined"},
+      ##       "file_path": {"type": "string", "description": "Full path to source file"},
+      ##       "line": {"type": "integer", "minimum": 1, "description": "Line number where symbol is defined (1-based)"},
+      ##       "col": {"type": "integer", "minimum": 0, "description": "Column number where symbol starts (0-based)"},
+      ##       "signature": {"type": "string", "description": "Function signature including parameters and return type (for procs/funcs)"},
+      ##       "documentation": {"type": "string", "description": "Docstring or comment documentation if available"},
+      ##       "visibility": {"type": "string", "enum": ["public", "private"], "description": "Symbol visibility"}
+      ##     },
+      ##     "required": ["name", "symbol_type", "module", "file_path", "line"]
+      ##   }
+      ## }
       try:
         # Check cache first (symbol cache access)
         let cacheKey = fmt"{query}:{symbolType}:{moduleName}"
@@ -751,6 +781,23 @@ Use searchSymbols to search across all indexed code.
       ## and how to use it properly in your code.
       ## - symbolName: Exact name of the symbol to look up
       ## - moduleName: Optional module name to disambiguate symbols with the same name in different modules
+      ##
+      ## returns: {
+      ##   "type": "object",
+      ##   "description": "Detailed information about the requested symbol",
+      ##   "properties": {
+      ##     "name": {"type": "string", "description": "Symbol name"},
+      ##     "symbol_type": {"type": "string", "description": "Type: proc, type, var, const, template, macro, or iterator"},
+      ##     "module": {"type": "string", "description": "Module where defined"},
+      ##     "file_path": {"type": "string", "description": "Full path to source file"},
+      ##     "line": {"type": "integer", "minimum": 1, "description": "Line number (1-based)"},
+      ##     "col": {"type": "integer", "minimum": 0, "description": "Column number (0-based)"},
+      ##     "signature": {"type": "string", "description": "Function signature with params and return type"},
+      ##     "documentation": {"type": "string", "description": "Docstring or comment if available"},
+      ##     "visibility": {"type": "string", "enum": ["public", "private"], "description": "Symbol visibility"},
+      ##     "error": {"type": "string", "description": "Error message if symbol not found"}
+      ##   }
+      ## }
       try:
         # Check cache first (symbol cache access)
         let cacheKey = fmt"info:{symbolName}:{moduleName}"
@@ -781,6 +828,23 @@ Use searchSymbols to search across all indexed code.
       ## don't match. Returns results ranked by semantic similarity with confidence scores.
       ## - query: Natural language description of what you're looking for (e.g., "file upload handlers")
       ## - limit: Maximum number of results to return (default: 10, max: 50)
+      ##
+      ## returns: {
+      ##   "type": "array",
+      ##   "description": "Symbols ranked by semantic similarity to the query",
+      ##   "items": {
+      ##     "type": "object",
+      ##     "properties": {
+      ##       "name": {"type": "string", "description": "Symbol name"},
+      ##       "symbol_type": {"type": "string", "description": "Symbol type"},
+      ##       "module": {"type": "string", "description": "Module where defined"},
+      ##       "file_path": {"type": "string", "description": "Source file path"},
+      ##       "line": {"type": "integer", "description": "Line number"},
+      ##       "similarity_score": {"type": "number", "minimum": 0, "maximum": 1, "description": "Semantic similarity score (0-1)"},
+      ##       "documentation": {"type": "string", "description": "Symbol documentation if available"}
+      ##     }
+      ##   }
+      ## }
       try:
         if limit > 50:
           return "Error: Maximum limit is 50 results"
@@ -812,6 +876,22 @@ Use searchSymbols to search across all indexed code.
       ## - symbolName: Name of the symbol to find similar matches for
       ## - moduleName: Optional module name to scope the search
       ## - limit: Maximum number of similar symbols to return (default: 10)
+      ##
+      ## returns: {
+      ##   "type": "array",
+      ##   "description": "Symbols similar to the target symbol",
+      ##   "items": {
+      ##     "type": "object",
+      ##     "properties": {
+      ##       "name": {"type": "string", "description": "Symbol name"},
+      ##       "symbol_type": {"type": "string", "description": "Symbol type"},
+      ##       "module": {"type": "string", "description": "Module where defined"},
+      ##       "file_path": {"type": "string", "description": "Source file path"},
+      ##       "line": {"type": "integer", "description": "Line number"},
+      ##       "similarity_score": {"type": "number", "minimum": 0, "maximum": 1, "description": "Similarity to target symbol"}
+      ##     }
+      ##   }
+      ## }
       try:
         # Database operation (no locks needed - database is thread-safe)
         # First get the target symbol's embedding
@@ -836,6 +916,23 @@ Use searchSymbols to search across all indexed code.
       ## finding existing implementations similar to code you're writing or refactoring.
       ## - codeSnippet: Code example to find similar implementations for
       ## - limit: Maximum number of similar symbols to return (default: 10)
+      ##
+      ## returns: {
+      ##   "type": "array",
+      ##   "description": "Symbols similar to the provided code example",
+      ##   "items": {
+      ##     "type": "object",
+      ##     "properties": {
+      ##       "name": {"type": "string", "description": "Symbol name"},
+      ##       "symbol_type": {"type": "string", "description": "Symbol type"},
+      ##       "module": {"type": "string", "description": "Module where defined"},
+      ##       "file_path": {"type": "string", "description": "Source file path"},
+      ##       "line": {"type": "integer", "description": "Line number"},
+      ##       "similarity_score": {"type": "number", "minimum": 0, "maximum": 1, "description": "Similarity to code example"},
+      ##       "code_preview": {"type": "string", "description": "Preview of the matched code"}
+      ##     }
+      ##   }
+      ## }
       try:
         if codeSnippet.strip() == "":
           return "Error: Code snippet cannot be empty"
@@ -869,6 +966,22 @@ Use searchSymbols to search across all indexed code.
       ## concepts, architectural patterns, or problem domains.
       ## - conceptName: Programming concept to explore (e.g., "error handling", "async processing", "validation")
       ## - limit: Maximum number of related symbols to return (default: 20)
+      ##
+      ## returns: {
+      ##   "type": "array",
+      ##   "description": "Symbols related to the programming concept",
+      ##   "items": {
+      ##     "type": "object",
+      ##     "properties": {
+      ##       "name": {"type": "string", "description": "Symbol name"},
+      ##       "symbol_type": {"type": "string", "description": "Symbol type"},
+      ##       "module": {"type": "string", "description": "Module where defined"},
+      ##       "file_path": {"type": "string", "description": "Source file path"},
+      ##       "line": {"type": "integer", "description": "Line number"},
+      ##       "relevance_score": {"type": "number", "minimum": 0, "maximum": 1, "description": "Relevance to concept"}
+      ##     }
+      ##   }
+      ## }
       try:
         if conceptName.strip() == "":
           return "Error: Concept name cannot be empty"
@@ -908,6 +1021,11 @@ Use searchSymbols to search across all indexed code.
       ## Provides real-time streaming progress updates so you can monitor embedding generation progress.
       ## - symbolTypes: Comma-separated list of symbol types to process (e.g., "proc,type,const")
       ## - modules: Comma-separated list of modules to process (if empty, processes all modules)
+      ##
+      ## returns: {
+      ##   "type": "string",
+      ##   "description": "Embedding generation status message (success or error)"
+      ## }
       try:
         ctx.sendNotification("progress", %*{"message": "Initializing embedding generation...", "stage": "embedding_init"})
         
@@ -943,6 +1061,17 @@ Use searchSymbols to search across all indexed code.
       ## Get statistics about embedding coverage, including which symbols have embeddings,
       ## the embedding model being used, dimensions, and generation timestamps. Useful for
       ## monitoring embedding quality and coverage across the codebase.
+      ##
+      ## returns: {
+      ##   "type": "object",
+      ##   "description": "Embedding statistics including coverage and model info",
+      ##   "properties": {
+      ##     "total_symbols": {"type": "integer", "description": "Total symbols in database"},
+      ##     "embedded_symbols": {"type": "integer", "description": "Symbols with embeddings"},
+      ##     "coverage_percent": {"type": "number", "description": "Percentage coverage"},
+      ##     "model_info": {"type": "string", "description": "Model name and version"}
+      ##   }
+      ## }
       try:
         # Database operation (no locks needed - database is thread-safe)
         let stats = block:
@@ -958,6 +1087,11 @@ Use searchSymbols to search across all indexed code.
       ## Reports compilation errors, warnings, and semantic issues. Use this to verify code correctness
       ## before committing changes or to diagnose compilation problems.
       ## - filePath: Optional path to specific file to check (defaults to checking entire current project)
+      ##
+      ## returns: {
+      ##   "type": "string",
+      ##   "description": "Syntax check results with errors, warnings, and diagnostic information"
+      ## }
       try:
         # Get or create current project (projects access)
         let currentPath = getCurrentDir()
@@ -982,6 +1116,28 @@ Use searchSymbols to search across all indexed code.
       ## Get comprehensive statistics about the indexed project including symbol counts by type,
       ## module information, file counts, and indexing status. Use this to understand the scope
       ## and structure of the analyzed codebase and verify that indexing completed successfully.
+      ##
+      ## returns: {
+      ##   "type": "object",
+      ##   "description": "Project statistics including symbol and module counts",
+      ##   "properties": {
+      ##     "total_symbols": {"type": "integer", "minimum": 0, "description": "Total number of indexed symbols"},
+      ##     "total_modules": {"type": "integer", "minimum": 0, "description": "Total number of indexed modules"},
+      ##     "symbol_types": {
+      ##       "type": "array",
+      ##       "description": "Breakdown of symbols by type",
+      ##       "items": {
+      ##         "type": "object",
+      ##         "properties": {
+      ##           "type": {"type": "string", "description": "Symbol type (e.g., proc, type, var)"},
+      ##           "count": {"type": "integer", "minimum": 0, "description": "Number of symbols of this type"}
+      ##         },
+      ##         "required": ["type", "count"]
+      ##       }
+      ##     },
+      ##     "error": {"type": "string", "description": "Error message if stats retrieval failed"}
+      ##   }
+      ## }
       try:
         # Database operation (no locks needed - database is thread-safe)
         let stats = block:
@@ -1004,6 +1160,11 @@ Use searchSymbols to search across all indexed code.
       ## - directoryPath: Absolute or relative path to the directory to serve
       ## - name: Optional human-readable name for the directory resource
       ## - description: Optional description explaining what the directory contains
+      ##
+      ## returns: {
+      ##   "type": "string",
+      ##   "description": "Success or error message for directory registration"
+      ## }
       try:
         let normalizedPath = directoryPath.normalizedPath().absolutePath()
         if not dirExists(normalizedPath):
@@ -1024,6 +1185,21 @@ Use searchSymbols to search across all indexed code.
       ## List all directories currently registered as MCP resources, showing their paths, names,
       ## and descriptions. Use this to see what directories are available to MCP clients and
       ## verify that resources have been registered correctly.
+      ##
+      ## returns: {
+      ##   "type": "array",
+      ##   "description": "List of registered directory resources",
+      ##   "items": {
+      ##     "type": "object",
+      ##     "properties": {
+      ##       "path": {"type": "string", "description": "Full directory path"},
+      ##       "name": {"type": "string", "description": "Human-readable name"},
+      ##       "description": {"type": "string", "description": "Directory description"},
+      ##       "created": {"type": "string", "description": "Registration timestamp"}
+      ##     },
+      ##     "required": ["path", "name"]
+      ##   }
+      ## }
       try:
         # Database operation (no locks needed - database is thread-safe)
         let dirData = block:
@@ -1039,6 +1215,11 @@ Use searchSymbols to search across all indexed code.
       ## accessible to MCP clients. Use this to clean up resource registrations or remove
       ## directories that should no longer be exposed.
       ## - directoryPath: Path to the directory to stop serving (must match the originally registered path)
+      ##
+      ## returns: {
+      ##   "type": "string",
+      ##   "description": "Success or error message for directory removal"
+      ## }
       try:
         let normalizedPath = directoryPath.normalizedPath().absolutePath()
         # Database operation (no locks needed - database is thread-safe)
@@ -1061,6 +1242,26 @@ Use searchSymbols to search across all indexed code.
       ## List all Nimble packages discovered in the local system's package directories.
       ## Shows package names and their installation paths. Use this to see what packages
       ## are available for indexing and to verify that package discovery is working correctly.
+      ##
+      ## returns: {
+      ##   "type": "object",
+      ##   "description": "List of discovered Nimble packages",
+      ##   "properties": {
+      ##     "packages": {
+      ##       "type": "array",
+      ##       "description": "Array of package information",
+      ##       "items": {
+      ##         "type": "object",
+      ##         "properties": {
+      ##           "name": {"type": "string", "description": "Package name"},
+      ##           "path": {"type": "string", "description": "Installation path"}
+      ##         },
+      ##         "required": ["name", "path"]
+      ##       }
+      ##     },
+      ##     "count": {"type": "integer", "minimum": 0, "description": "Total number of packages"}
+      ##   }
+      ## }
       try:
         # Nimble packages access
         withNimblePackages:
@@ -1084,6 +1285,11 @@ Use searchSymbols to search across all indexed code.
       ## available for search and analysis. Required before you can search for symbols in a package.
       ## Provides real-time streaming progress updates so you can monitor package indexing progress.
       ## - packageName: Name of the Nimble package to index (must be from the discovered packages list)
+      ##
+      ## returns: {
+      ##   "type": "string",
+      ##   "description": "Success message with indexing statistics or error message"
+      ## }
       try:
         ctx.sendNotification("progress", %*{"message": fmt"Starting indexing of Nimble package '{packageName}'", "stage": "package_init"})
         
@@ -1135,6 +1341,11 @@ Use searchSymbols to search across all indexed code.
       ## to your project or to install missing dependencies.
       ## - packageName: Name of the package to install from the Nimble registry
       ## - version: Optional version constraint (e.g., ">= 1.0.0", "~= 2.1", "== 1.5.0")
+      ##
+      ## returns: {
+      ##   "type": "string",
+      ##   "description": "Installation result message (success or error)"
+      ## }
       try:
         # Database operation (no locks needed - database is thread-safe)
         let currentPath = getCurrentDir()
@@ -1149,6 +1360,11 @@ Use searchSymbols to search across all indexed code.
       ## the package and may affect projects that depend on it. Use this to clean up unused
       ## packages or resolve dependency conflicts.
       ## - packageName: Name of the installed package to remove
+      ##
+      ## returns: {
+      ##   "type": "string",
+      ##   "description": "Uninstallation result message (success or error)"
+      ## }
       try:
         # Database operation (no locks needed - database is thread-safe)
         let currentPath = getCurrentDir()
@@ -1163,6 +1379,11 @@ Use searchSymbols to search across all indexed code.
       ## Returns package names, descriptions, and metadata. Use this to discover packages
       ## that provide functionality you need or to explore the Nim ecosystem.
       ## - query: Search terms to find packages (searches names, descriptions, and tags)
+      ##
+      ## returns: {
+      ##   "type": "string",
+      ##   "description": "Formatted search results with package information"
+      ## }
       try:
         # Database operation (no locks needed - database is thread-safe)
         let currentPath = getCurrentDir()
@@ -1177,6 +1398,11 @@ Use searchSymbols to search across all indexed code.
       ## Use this to see what packages are available for installation or to check
       ## what's currently installed on your system.
       ## - installed: If true, show only locally installed packages; if false, show available packages from registry
+      ##
+      ## returns: {
+      ##   "type": "string",
+      ##   "description": "Formatted list of packages with metadata"
+      ## }
       try:
         # Database operation (no locks needed - database is thread-safe)
         let currentPath = getCurrentDir()
@@ -1190,6 +1416,11 @@ Use searchSymbols to search across all indexed code.
       ## Update the local cache of available packages from the Nimble registry.
       ## Run this periodically to ensure you have the latest package information
       ## and can discover newly published packages. Use before searching or installing packages.
+      ##
+      ## returns: {
+      ##   "type": "string",
+      ##   "description": "Refresh result message (success or error)"
+      ## }
       try:
         # Database operation (no locks needed - database is thread-safe)
         let currentPath = getCurrentDir()
@@ -1209,6 +1440,11 @@ Use searchSymbols to search across all indexed code.
       ## Automatically generates .nimble file, source directories, and initial code templates.
       ## The new project is automatically indexed after creation.
       ## - projectName: Name for the new project (will be used for directory and package name)
+      ##
+      ## returns: {
+      ##   "type": "string",
+      ##   "description": "Initialization result with project details and indexing status"
+      ## }
       try:
         # Database operation (no locks needed - database is thread-safe)
         let currentPath = getCurrentDir()
@@ -1237,6 +1473,11 @@ Use searchSymbols to search across all indexed code.
       ## output so you can see compilation progress as it happens, especially useful for large projects.
       ## - target: Optional specific target to build (defaults to all targets defined in .nimble file)
       ## - mode: Optional compilation mode ("debug", "release", or custom mode from .nimble config)
+      ##
+      ## returns: {
+      ##   "type": "string",
+      ##   "description": "Build result with compilation messages and binary information"
+      ## }
       try:
         # Database operation (no locks needed - database is thread-safe)
         let currentPath = getCurrentDir()
@@ -1252,6 +1493,11 @@ Use searchSymbols to search across all indexed code.
       ## Use this to verify code correctness and maintain code quality. Provides real-time streaming
       ## output so you can see test progress as it happens, especially useful for long-running test suites.
       ## - testFilter: Optional filter to run only specific tests or test files matching the pattern
+      ##
+      ## returns: {
+      ##   "type": "string",
+      ##   "description": "Test execution results with pass/fail counts and detailed output"
+      ## }
       try:
         # Database operation (no locks needed - database is thread-safe)
         let currentPath = getCurrentDir()
@@ -1267,6 +1513,11 @@ Use searchSymbols to search across all indexed code.
       ## and functionality during development.
       ## - target: Name of the executable target to run (as defined in .nimble file)
       ## - args: Optional command-line arguments to pass to the executable (space-separated)
+      ##
+      ## returns: {
+      ##   "type": "string",
+      ##   "description": "Program execution output and exit status"
+      ## }
       try:
         # Database operation (no locks needed - database is thread-safe)
         let currentPath = getCurrentDir()
@@ -1282,6 +1533,11 @@ Use searchSymbols to search across all indexed code.
       ## and project structure. Reports configuration errors and suggests fixes. Use this to
       ## troubleshoot project setup issues and ensure valid configuration.
       ## - file: Optional path to specific .nimble file to check (defaults to current project's .nimble file)
+      ##
+      ## returns: {
+      ##   "type": "string",
+      ##   "description": "Validation results with errors, warnings, and suggestions"
+      ## }
       try:
         # Database operation (no locks needed - database is thread-safe)
         let currentPath = getCurrentDir()
@@ -1302,6 +1558,11 @@ Use searchSymbols to search across all indexed code.
       ## when working on multiple related packages or contributing to other projects.
       ## - action: Action to perform ("add" to link local package, "remove" to unlink, "list" to show current links)
       ## - path: Local path to package directory (required for "add" action, ignored for others)
+      ##
+      ## returns: {
+      ##   "type": "string",
+      ##   "description": "Development package management result (success or error)"
+      ## }
       try:
         # Database operation (no locks needed - database is thread-safe)
         let currentPath = getCurrentDir()
@@ -1316,6 +1577,11 @@ Use searchSymbols to search across all indexed code.
       ## Can upgrade all packages or a specific package. Use this to get bug fixes, new features,
       ## and security updates from package dependencies.
       ## - packageName: Optional name of specific package to upgrade (if empty, upgrades all packages)
+      ##
+      ## returns: {
+      ##   "type": "string",
+      ##   "description": "Upgrade results with updated packages and version information"
+      ## }
       try:
         # Database operation (no locks needed - database is thread-safe)
         let currentPath = getCurrentDir()
@@ -1329,6 +1595,11 @@ Use searchSymbols to search across all indexed code.
       ## Export detailed dependency information for the current project in machine-readable format.
       ## Shows all direct and transitive dependencies with versions, paths, and metadata.
       ## Use this for build automation, dependency analysis, or project documentation.
+      ##
+      ## returns: {
+      ##   "type": "string",
+      ##   "description": "JSON-formatted dependency tree with versions and metadata"
+      ## }
       try:
         # Database operation (no locks needed - database is thread-safe)
         let currentPath = getCurrentDir()
@@ -1348,6 +1619,11 @@ Use searchSymbols to search across all indexed code.
       ## author, license, dependencies, and installation details. Use this to learn about
       ## packages before installing them or to get documentation links and usage information.
       ## - packageName: Name of the package to get information about (can be installed or from registry)
+      ##
+      ## returns: {
+      ##   "type": "string",
+      ##   "description": "Detailed package information including metadata and dependencies"
+      ## }
       try:
         # Database operation (no locks needed - database is thread-safe)
         let currentPath = getCurrentDir()
@@ -1362,6 +1638,11 @@ Use searchSymbols to search across all indexed code.
       ## dependencies with their versions and relationships. Use this to understand project
       ## dependencies, diagnose version conflicts, or document project requirements.
       ## - showTree: If true, display dependencies in tree format showing the dependency hierarchy; if false, show flat list
+      ##
+      ## returns: {
+      ##   "type": "string",
+      ##   "description": "Formatted dependency tree or list with version information"
+      ## }
       try:
         # Database operation (no locks needed - database is thread-safe)
         let currentPath = getCurrentDir()
@@ -1376,6 +1657,11 @@ Use searchSymbols to search across all indexed code.
       ## Shows version numbers, release dates, and compatibility information. Use this
       ## to choose appropriate versions for installation or to check update availability.
       ## - packageName: Name of the package to check versions for
+      ##
+      ## returns: {
+      ##   "type": "string",
+      ##   "description": "List of available versions with release dates and compatibility info"
+      ## }
       try:
         # Database operation (no locks needed - database is thread-safe)
         let currentPath = getCurrentDir()
@@ -1390,6 +1676,11 @@ Use searchSymbols to search across all indexed code.
       ## description, dependencies, build settings, and other metadata. Use this to understand
       ## project structure and verify configuration settings.
       ## - property: Optional specific property to show (e.g., "name", "version", "dependencies"); if empty, shows all properties
+      ##
+      ## returns: {
+      ##   "type": "string",
+      ##   "description": "Project configuration details including metadata and build settings"
+      ## }
       try:
         # Database operation (no locks needed - database is thread-safe)
         let currentPath = getCurrentDir()
@@ -1403,6 +1694,19 @@ Use searchSymbols to search across all indexed code.
       ## Check if the current directory is a valid Nimble project and display comprehensive status
       ## information including project type, dependencies, indexing status, and any issues.
       ## Use this as a diagnostic tool to verify project setup and troubleshoot problems.
+      ##
+      ## returns: {
+      ##   "type": "object",
+      ##   "description": "Project status information and configuration",
+      ##   "properties": {
+      ##     "isNimbleProject": {"type": "boolean", "description": "Whether current directory is a Nimble project"},
+      ##     "projectPath": {"type": "string", "description": "Path to the project directory"},
+      ##     "nimbleFile": {"type": "string", "description": "Path to .nimble file if project exists"},
+      ##     "hasSymbolsIndexed": {"type": "boolean", "description": "Whether symbols have been indexed"},
+      ##     "dependencies": {"type": "string", "description": "Dependency information if available"},
+      ##     "message": {"type": "string", "description": "Status message or error information"}
+      ##   }
+      ## }
       try:
         let currentPath = getCurrentDir()
         if isNimbleProject(currentPath):
@@ -1441,7 +1745,7 @@ Use searchSymbols to search across all indexed code.
 
   mcpTool:
     proc dbConnect(dbType: string, host: string = "", port: int = 0, user: string = "", password: string = "", database: string = ""): string {.gcsafe.} =
-      ## Connect to an external database (MySQL, TiDB, or PostgreSQL). Establishes a persistent 
+      ## Connect to an external database (MySQL, TiDB, or PostgreSQL). Establishes a persistent
       ## connection pool that can be used for subsequent queries. Use this before executing any
       ## database operations to set up the connection with the target database.
       ## - dbType: Database type ("mysql", "tidb", "postgresql")
@@ -1450,6 +1754,19 @@ Use searchSymbols to search across all indexed code.
       ## - user: Database username (default: root for MySQL/TiDB, postgres for PostgreSQL)
       ## - password: Database password (default: empty)
       ## - database: Database name to connect to (default: database-type specific defaults)
+      ##
+      ## returns: {
+      ##   "type": "object",
+      ##   "description": "Connection result status and configuration",
+      ##   "properties": {
+      ##     "success": {"type": "boolean", "description": "Whether connection was successful"},
+      ##     "databaseType": {"type": "string", "description": "Database type connected to"},
+      ##     "host": {"type": "string", "description": "Database server hostname"},
+      ##     "port": {"type": "integer", "description": "Database server port"},
+      ##     "database": {"type": "string", "description": "Connected database name"},
+      ##     "error": {"type": "string", "description": "Error message if connection failed"}
+      ##   }
+      ## }
       {.cast(gcsafe).}:
         try:
           # Create configuration from parameters
@@ -1476,6 +1793,16 @@ Use searchSymbols to search across all indexed code.
       ## views, or executing complex analytical queries.
       ## - sql: SQL SELECT statement to execute (supports ? placeholders for parameters)
       ## - params: Comma-separated parameter values for placeholders in the query (optional)
+      ##
+      ## returns: {
+      ##   "type": "array",
+      ##   "description": "Query results as an array of row objects",
+      ##   "items": {
+      ##     "type": "object",
+      ##     "description": "Row data with column names as keys",
+      ##     "additionalProperties": true
+      ##   }
+      ## }
       {.cast(gcsafe).}:
         try:
           if not isConnected():
@@ -1494,6 +1821,16 @@ Use searchSymbols to search across all indexed code.
       ## Use this for modifying data in database tables.
       ## - sql: SQL INSERT/UPDATE/DELETE statement to execute (supports ? placeholders for parameters)
       ## - params: Comma-separated parameter values for placeholders in the query (optional)
+      ##
+      ## returns: {
+      ##   "type": "object",
+      ##   "description": "Execution result with affected row count",
+      ##   "properties": {
+      ##     "success": {"type": "boolean", "description": "Whether execution succeeded"},
+      ##     "affected_rows": {"type": "integer", "minimum": 0, "description": "Number of rows modified"},
+      ##     "message": {"type": "string", "description": "Execution status message"}
+      ##   }
+      ## }
       {.cast(gcsafe).}:
         try:
           if not isConnected():
@@ -1610,6 +1947,19 @@ Use searchSymbols to search across all indexed code.
       ## Check the connection status and display information about the current database connection
       ## including database type, host, port, database name, and connection health. Use this to
       ## verify connectivity and troubleshoot connection issues.
+      ##
+      ## returns: {
+      ##   "type": "object",
+      ##   "description": "Database connection status and configuration",
+      ##   "properties": {
+      ##     "connected": {"type": "boolean", "description": "Whether a connection is active"},
+      ##     "database_type": {"type": "string", "description": "Database type (mysql, tidb, postgresql)"},
+      ##     "host": {"type": "string", "description": "Database server hostname"},
+      ##     "port": {"type": "integer", "description": "Database server port"},
+      ##     "database": {"type": "string", "description": "Connected database name"},
+      ##     "error": {"type": "string", "description": "Error message if connection failed"}
+      ##   }
+      ## }
       try:
         let status = getConnectionStatus()
         return $status
@@ -1621,6 +1971,11 @@ Use searchSymbols to search across all indexed code.
       ## Close the connection to the external database and free associated resources.
       ## Use this to cleanly disconnect when database operations are complete or to
       ## reset the connection before connecting to a different database.
+      ##
+      ## returns: {
+      ##   "type": "string",
+      ##   "description": "Disconnection success or error message"
+      ## }
       try:
         disconnectExternalDb()
         return "Successfully disconnected from external database"
