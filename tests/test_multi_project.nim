@@ -2,7 +2,7 @@
 ## Tests the data structures and foundations for multi-project support
 
 import unittest, json, os, times, tables
-import ../src/nimgenie, ../src/database
+import ../src/[nimgenie, database, configuration]
 import test_utils, test_server
 
 suite "Multi-Project Architecture Tests":
@@ -120,11 +120,19 @@ suite "NimGenie Integration Tests":
       removeDir(testTempDir)
 
   test "Test openGenie functionality":
-    # Test the main openGenie function
     let projectPath = createTestProject(testTempDir, "open_test")
-    let genie = openGenie(projectPath)
-    
-    # Database is value type, not reference type
+    let testConfig = Config(
+      port: 8080,
+      host: "localhost",
+      database: "nimgenie_test",
+      databaseHost: "127.0.0.1",
+      databasePort: 4000,
+      databaseUser: "root",
+      databasePassword: "",
+      databasePoolSize: 5
+    )
+    let genie = openGenie(testConfig)
+
     check genie.projects.len >= 0
     check genie.nimblePackages.len >= 0
     check genie.symbolCache.len >= 0
