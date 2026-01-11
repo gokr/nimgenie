@@ -96,7 +96,7 @@ proc createExternalDbConfig*(config: Config): ExternalDbConfig =
   result = ExternalDbConfig(
     dbType: dbType,
     host: getEnv("DB_HOST", if config.externalDbHost != "": config.externalDbHost else: "localhost"),
-    port: parseInt(getEnv("DB_PORT", $getDefaultPort(dbType))),
+    port: parseInt(getEnv("DB_PORT", if config.externalDbPort != 0: $config.externalDbPort else: $getDefaultPort(dbType))),
     user: getEnv("DB_USER", if config.externalDbUser != "": config.externalDbUser else: getDefaultUser(dbType)),
     password: getEnv("DB_PASSWORD", config.externalDbPassword),
     database: getEnv("DB_DATABASE", if config.externalDbDatabase != "": config.externalDbDatabase else: getDefaultDatabase(dbType)),
