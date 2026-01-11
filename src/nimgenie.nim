@@ -1204,17 +1204,16 @@ Use searchSymbols to search across all indexed code.
   # ============================================================================
 
   mcpTool:
-    proc nimbleInitProject(projectName: string, packageType: string = "lib"): string {.gcsafe.} =
+    proc nimbleInitProject(projectName: string): string {.gcsafe.} =
       ## Create a new Nimble project with the standard directory structure and configuration files.
       ## Automatically generates .nimble file, source directories, and initial code templates.
       ## The new project is automatically indexed after creation.
       ## - projectName: Name for the new project (will be used for directory and package name)
-      ## - packageType: Type of project to create ("lib" for library, "bin" for executable, "hybrid" for both)
       try:
         # Database operation (no locks needed - database is thread-safe)
         let currentPath = getCurrentDir()
-        let nimbleResult = nimbleInit(currentPath, projectName, packageType)
-        
+        let nimbleResult = nimbleInit(currentPath, projectName)
+
         # After successful project initialization, automatically index it
         if nimbleResult.success:
           let indexer = block:

@@ -1,11 +1,12 @@
-import std/[json, strutils, strformat, osproc, os, options, streams]
-import nimcp
+import std/[json, strutils, strformat, osproc, os, options, streams, tables]
+import nimcp, database, configuration, indexer
 
 type
   NimbleResult* = object
     success*: bool
     output*: string
     errorMsg*: string
+    error*: string
     data*: JsonNode
 
   NimbleCommand* = object
@@ -34,6 +35,7 @@ proc executeNimble*(cmd: NimbleCommand, args: varargs[string]): NimbleResult =
     
     if not result.success:
       result.errorMsg = fmt"Nimble command failed with exit code {exitCode}: {result.output}"
+      result.error = result.errorMsg
     
     # Try to parse JSON output if available
     if result.success and result.output.len > 0:
@@ -48,6 +50,7 @@ proc executeNimble*(cmd: NimbleCommand, args: varargs[string]): NimbleResult =
   except Exception as e:
     result.success = false
     result.errorMsg = fmt"Failed to execute nimble command: {e.msg}"
+    result.error = result.errorMsg
     result.output = ""
 
 proc formatNimbleOutput*(nimbleResult: NimbleResult): string =
@@ -62,23 +65,32 @@ proc formatNimbleOutput*(nimbleResult: NimbleResult): string =
 
 # Package Management Operations
 
-proc nimbleInstall*(workingDir: string, packageName: string, version: string = ""): NimbleResult =
-  ## Install a package with optional version constraint
+proc nimbleInstall*(workingDir: string, packageName: string, version: string = "", dryRun: bool = false): NimbleResult =
+  ## Install a package with optional version constraint and optional dry-run
   let cmd = newNimbleCommand(workingDir)
+  var args: seq[string] = @[]
+  args.add("install")
   if version.len > 0:
-    return cmd.executeNimble("install", fmt"{packageName}@{version}", "--accept")
+    args.add(fmt"{packageName}@{version}")
   else:
-    return cmd.executeNimble("install", packageName, "--accept")
+    args.add(packageName)
+  args.add("--accept")
+  if dryRun:
+    args.add("--dry-run")
+  return cmd.executeNimble(args)
 
 proc nimbleUninstall*(workingDir: string, packageName: string): NimbleResult =
   ## Uninstall a package
   let cmd = newNimbleCommand(workingDir)
   return cmd.executeNimble("uninstall", packageName, "--accept")
 
-proc nimbleSearch*(workingDir: string, query: string): NimbleResult =
-  ## Search for packages in the registry
+proc nimbleSearch*(workingDir: string, query: string, asJson: bool = false): NimbleResult =
+  ## Search for packages in the registry. If `asJson` is true, request JSON output.
   let cmd = newNimbleCommand(workingDir)
-  return cmd.executeNimble("search", query)
+  if asJson:
+    return cmd.executeNimble("search", query, "--json")
+  else:
+    return cmd.executeNimble("search", query)
 
 proc nimbleList*(workingDir: string, installed: bool = false): NimbleResult =
   ## List packages (installed vs available)
@@ -95,10 +107,13 @@ proc nimbleRefresh*(workingDir: string): NimbleResult =
 
 # Project Development Operations
 
-proc nimbleInit*(workingDir: string, projectName: string, packageType: string = "lib"): NimbleResult =
-  ## Initialize a new Nimble project
+proc nimbleInit*(workingDir: string, projectName: string, accept: bool = true): NimbleResult =
+  ## Initialize a new Nimble project. If `accept` is true, pass --accept.
   let cmd = newNimbleCommand(workingDir)
-  return cmd.executeNimble("init", projectName, "--accept", "--type:" & packageType)
+  if accept:
+    return cmd.executeNimble("init", projectName, "--accept")
+  else:
+    return cmd.executeNimble("init", projectName)
 
 proc nimbleBuild*(workingDir: string, target: string = "", mode: string = ""): NimbleResult =
   ## Build project with optional target and mode
@@ -152,6 +167,7 @@ proc nimbleBuildWithStreaming*(ctx: McpRequestContext, workingDir: string, targe
         process.terminate()
         result.success = false
         result.errorMsg = "Build was cancelled"
+        result.error = result.errorMsg
         result.output = outputLines.join("\n")
         ctx.sendNotification("progress", %*{"message": "Build was cancelled", "stage": "cancelled"})
         return
@@ -165,6 +181,7 @@ proc nimbleBuildWithStreaming*(ctx: McpRequestContext, workingDir: string, targe
     
     if not result.success:
       result.errorMsg = fmt"Nimble build failed with exit code {exitCode}"
+      result.error = result.errorMsg
       ctx.sendNotification("progress", %*{"message": fmt"Build completed with exit code: {exitCode}", "stage": "failed", "exitCode": exitCode})
     else:
       ctx.sendNotification("progress", %*{"message": "Build completed successfully", "stage": "completed", "exitCode": exitCode})
@@ -172,6 +189,7 @@ proc nimbleBuildWithStreaming*(ctx: McpRequestContext, workingDir: string, targe
   except Exception as e:
     result.success = false
     result.errorMsg = fmt"Failed to execute nimble build: {e.msg}"
+    result.error = result.errorMsg
     result.output = ""
     ctx.sendNotification("progress", %*{"message": fmt"Build execution failed: {e.msg}", "stage": "error"})
 
@@ -218,6 +236,7 @@ proc nimbleTestWithStreaming*(ctx: McpRequestContext, workingDir: string, testFi
         process.terminate()
         result.success = false
         result.errorMsg = "Test execution was cancelled"
+        result.error = result.errorMsg
         result.output = outputLines.join("\n")
         ctx.sendNotification("progress", %*{"message": "Test execution was cancelled", "stage": "cancelled"})
         return
@@ -231,6 +250,7 @@ proc nimbleTestWithStreaming*(ctx: McpRequestContext, workingDir: string, testFi
     
     if not result.success:
       result.errorMsg = fmt"Nimble test failed with exit code {exitCode}"
+      result.error = result.errorMsg
       ctx.sendNotification("progress", %*{"message": fmt"Test execution completed with exit code: {exitCode}", "stage": "failed", "exitCode": exitCode})
     else:
       ctx.sendNotification("progress", %*{"message": "Test execution completed successfully", "stage": "completed", "exitCode": exitCode})
@@ -238,6 +258,7 @@ proc nimbleTestWithStreaming*(ctx: McpRequestContext, workingDir: string, testFi
   except Exception as e:
     result.success = false
     result.errorMsg = fmt"Failed to execute nimble test: {e.msg}"
+    result.error = result.errorMsg
     result.output = ""
     ctx.sendNotification("progress", %*{"message": fmt"Test execution failed: {e.msg}", "stage": "error"})
 
@@ -333,3 +354,130 @@ proc getNimbleFile*(path: string): Option[string] =
   for file in walkFiles(path / "*.nimble"):
     return some(file)
   return none(string)
+
+proc parseNimbleFile*(filePath: string): JsonNode =
+  ## Lightweight parser for simple nimble files.
+  ## Extracts basic key = "value" pairs and @[...] arrays into a Json object.
+  result = newJObject()
+  if not fileExists(filePath):
+    return result
+
+  try:
+    let contents = readFile(filePath)
+    for rawLine in contents.splitLines():
+      var line = rawLine.strip()
+      if line.len == 0: continue
+      if line.startsWith("#"): continue
+      if line.startsWith("task "): continue
+
+      let eqPos = line.find('=')
+      if eqPos < 0: continue
+
+      let key = line[0..eqPos-1].strip()
+      var val = line[eqPos+1..^1].strip()
+
+      # Handle array syntax: @["a", "b"]
+      if val.startsWith("@[") and val.endsWith("]"):
+        var arr = newJArray()
+        var inner = val[2..^2].strip()
+        if inner.len > 0:
+          for item in inner.split(','):
+            var s = item.strip()
+            if s.startsWith('"') and s.endsWith('"') and s.len >= 2:
+              s = s[1..^2]
+            arr.add(newJString(s))
+        result[key] = arr
+        continue
+
+      # Handle quoted strings
+      if val.startsWith('"') and val.endsWith('"') and val.len >= 2:
+        let unq = val[1..^2]
+        result[key] = newJString(unq)
+        continue
+
+      # Fallback: store raw value as string
+      result[key] = newJString(val)
+
+  except Exception:
+    # Return empty object on parse errors
+    result = newJObject()
+
+  return result
+
+proc discoverPackagesInDirectory*(dirPath: string): Table[string, string] =
+  ## Discover nimble packages in an arbitrary directory. Returns a table mapping package name -> path
+  result = initTable[string, string]()
+  if not dirExists(dirPath):
+    return result
+
+  for kind, path in walkDir(dirPath):
+    if kind == pcDir:
+      # Look for .nimble file in the package directory
+      for file in walkFiles(path / "*.nimble"):
+        let pkgName = extractFilename(file).split('.')[0]
+        if pkgName.len > 0 and pkgName notin result:
+          result[pkgName] = path
+        break
+
+  return result
+
+type PackageIndexResult* = object
+  success*: bool
+  symbolsIndexed*: int
+  error*: string
+
+proc indexNimblePackage*(db: Database, packageName: string, packagePath: string): PackageIndexResult =
+  ## Index a Nimble package into the provided `Database` and return a result summary.
+  result.success = false
+  result.symbolsIndexed = 0
+  result.error = ""
+
+  if not dirExists(packagePath):
+    result.error = fmt"Package path does not exist: {packagePath}"
+    return result
+
+  try:
+    # Create a minimal Config for the indexer
+    var cfg: Config
+    cfg.projectPath = packagePath
+    cfg.port = 0
+    cfg.host = ""
+    cfg.verbose = false
+    cfg.showHelp = false
+    cfg.showVersion = false
+    cfg.database = ""
+    cfg.databaseHost = ""
+    cfg.databasePort = 0
+    cfg.databaseUser = ""
+    cfg.databasePassword = ""
+    cfg.databasePoolSize = 1
+    cfg.noDiscovery = true
+    cfg.ollamaHost = ""
+    cfg.embeddingModel = ""
+    cfg.embeddingBatchSize = 1
+    cfg.vectorSimilarityThreshold = 0.0
+    cfg.enableDependencyTracking = false
+    cfg.externalDbType = ""
+    cfg.externalDbHost = ""
+    cfg.externalDbPort = 0
+    cfg.externalDbUser = ""
+    cfg.externalDbPassword = ""
+    cfg.externalDbDatabase = ""
+    cfg.externalDbPoolSize = 0
+
+    let idx = newIndexer(db, packagePath, cfg)
+
+    let nimFiles = idx.findNimFiles()
+    var total = 0
+    for f in nimFiles:
+      let (ok, count) = idx.indexSingleFile(f)
+      if ok:
+        total += count
+
+    result.symbolsIndexed = total
+    result.success = total > 0
+  except Exception as e:
+    result.error = e.msg
+    result.success = false
+
+  return result
