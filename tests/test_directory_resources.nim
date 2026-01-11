@@ -1,10 +1,13 @@
 ## Comprehensive tests for NimGenie directory resource functionality
 ## Tests database operations, MCP tools, MIME type detection, and file serving capabilities
-## Consolidates all directory resource testing into a single comprehensive test suite
+##
+## Consolidates:
+## - test_directory_resources.nim (original)
+## - test_mcp_tools.nim (merged)
 
 import unittest, json, os, strutils, times
 import ../src/database
-import test_utils
+import test_utils, test_fixtures
 
 suite "Database Directory Registration Tests":
   
@@ -277,38 +280,100 @@ suite "MIME Type Detection Tests":
 
 suite "File Serving Utilities Tests":
 
-  var testTempDir: string
-
-  setup:
-    testTempDir = getTempDir() / "nimgenie_serve_test_" & $getTime().toUnix()
-    createDir(testTempDir)
-    
-  teardown:
-    if dirExists(testTempDir):
-      removeDir(testTempDir)
-
   test "encodeFileAsBase64 - binary file":
-    let testFile = testTempDir / "binary.dat"
-    let testData = "\x00\x01\x02\x03\x04\xFF"
-    writeFile(testFile, testData)
-    
-    let encoded = encodeFileAsBase64(testFile)
-    check encoded.len > 0
-    # Base64 encoding should not contain raw binary data
-    check "\x00" notin encoded
-    check "\xFF" notin encoded
-    
+    withTestFixture:
+      let testFile = fixture.tempDir / "binary.dat"
+      let testData = "\x00\x01\x02\x03\x04\xFF"
+      writeFile(testFile, testData)
+
+      let encoded = encodeFileAsBase64(testFile)
+      check encoded.len > 0
+      check "\x00" notin encoded
+      check "\xFF" notin encoded
+
   test "listDirectoryFiles - recursive listing":
-    # Create nested structure
-    let subDir = testTempDir / "subdir"
-    createDir(subDir)
-    writeFile(testTempDir / "file1.txt", "content1")
-    writeFile(testTempDir / "file2.png", "png_content")
-    writeFile(subDir / "nested.json", "json_content")
-    
-    let files = listDirectoryFiles(testTempDir)
-    
-    check files.len == 3
-    check "file1.txt" in files
-    check "file2.png" in files
-    check "subdir/nested.json" in files or "subdir\\nested.json" in files  # Handle Windows paths
+    withTestFixture:
+      let subDir = fixture.tempDir / "subdir"
+      createDir(subDir)
+      writeFile(fixture.tempDir / "file1.txt", "content1")
+      writeFile(fixture.tempDir / "file2.png", "png_content")
+      writeFile(subDir / "nested.json", "json_content")
+
+      let files = listDirectoryFiles(fixture.tempDir)
+
+      check files.len == 3
+      check "file1.txt" in files
+      check "file2.png" in files
+      check "subdir/nested.json" in files or "subdir\\nested.json" in files
+
+suite "Integration Tests with File System":
+
+  test "Register directory with actual files and verify paths":
+    withTestFixture:
+      let screenshotDir = fixture.tempDir / "screenshots"
+      let subDir = screenshotDir / "subfolder"
+      createDir(screenshotDir)
+      createDir(subDir)
+
+      writeFile(screenshotDir / "main.png", "main screenshot")
+      writeFile(screenshotDir / "error.png", "error screenshot")
+      writeFile(subDir / "detail.png", "detail screenshot")
+      writeFile(screenshotDir / "readme.txt", "Screenshot documentation")
+
+      proc testAddDirectoryToResources(db: Database, dirPath: string, name: string = "", description: string = ""): bool =
+        if not dirExists(dirPath):
+          return false
+        let normalizedPath = dirPath.normalizedPath().absolutePath()
+        return db.addRegisteredDirectory(normalizedPath, name, description)
+
+      proc testListDirectoryResources(db: Database): string =
+        let dirData = db.getRegisteredDirectories()
+        return $dirData
+
+      let result = testAddDirectoryToResources(fixture.database, screenshotDir, "Screenshots", "App screenshots")
+      check result == true
+
+      let listJson = parseJson(testListDirectoryResources(fixture.database))
+      check listJson.len == 1
+
+      let entry = listJson[0]
+      let registeredPath = entry["path"].getStr()
+
+      check registeredPath.isAbsolute()
+      check registeredPath == screenshotDir.normalizedPath().absolutePath()
+
+      check fileExists(registeredPath / "main.png")
+      check fileExists(registeredPath / "error.png")
+      check fileExists(registeredPath / "subfolder" / "detail.png")
+      check fileExists(registeredPath / "readme.txt")
+
+  test "Path normalization consistency":
+    withTestFixture:
+      proc testAddDirectoryToResources(db: Database, dirPath: string, name: string = "", description: string = ""): bool =
+        if not dirExists(dirPath):
+          return false
+        let normalizedPath = dirPath.normalizedPath().absolutePath()
+        return db.addRegisteredDirectory(normalizedPath, name, description)
+
+      proc testListDirectoryResources(db: Database): string =
+        let dirData = db.getRegisteredDirectories()
+        return $dirData
+
+      let baseDir = fixture.tempDir / "test_paths"
+      createDir(baseDir)
+      writeFile(baseDir / "file.txt", "test content")
+
+      let currentDir = getCurrentDir()
+      setCurrentDir(fixture.tempDir)
+
+      let result1 = testAddDirectoryToResources(fixture.database, "test_paths", "Relative", "Relative path test")
+      check result1 == true
+
+      setCurrentDir(currentDir)
+
+      let result2 = testAddDirectoryToResources(fixture.database, baseDir, "Absolute", "Absolute path test")
+      check result2 == true
+
+      let listJson = parseJson(testListDirectoryResources(fixture.database))
+      check listJson.len == 1
+      check listJson[0]["name"].getStr() == "Absolute"
